@@ -1,5 +1,13 @@
+/*
+http://colorschemedesigner.com/#4631SjzmRoHwt
+*/
+
+body {
+    background-color: #DBD792;
+}
+
 .wrapper {
-    background-color: #eee;
+    background-color: #DBC092;
 }
 
 .title-section h1 {
@@ -11,7 +19,7 @@
 }
 
 .slave-section {
-    background-color: #e8f3ff;
+    background-color: #938F4A;
     margin: 3px;
     padding: 5px;
     border-radius: 5px;
@@ -41,4 +49,79 @@
 }
 .progress-bar {
     white-space: nowrap;
+}
+
+.no-slaves {
+    padding: 10px;
+    font-weight: bold;
+}
+
+.wide-button {
+    width: 100%;
+}
+
+.form-control {
+    background-color: #fffed7;
+    border-color: #a09a3d;
+}
+
+.load-button {
+    margin-bottom: 10px;
+}
+
+.header-buttons {
+    margin-top: 1.6em;
+}
+
+.glyphicon-buttons li:hover {
+    cursor: pointer;
+    color: #555;
+}
+.glyphicon-buttons li {
+    padding: 3px;
+    margin-left: 5px;
+    font-size: 1.5em;
+}
+
+.alert.save-successful {
+    cursor: pointer;
+}
+
+.btn-success {
+    background-color: #B6B047;
+    border-color: #bdb74f;
+}
+.btn-success:hover {
+    background-color: #938F4A;
+}
+.btn-success:focus {
+    background-color: #a09a3d;
+}
+
+.action-group {
+    padding: 10px;
+}
+
+.action-header {
+    background-color: #DBD792;
+    border-radius: 8px;
+    padding-top: 12px;
+    margin-bottom: 5px;
+    position: relative;
+    z-index: 10;
+}
+
+.action-expander {
+    cursor: pointer;
+    font-size: 2em;
+    margin-top: .65em;
+}
+
+.action-body {
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+    background-color: #fffde1;
+    padding-top: 20px;
+    margin-top: -10px;
+    z-index: 10;
 }

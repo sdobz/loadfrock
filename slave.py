@@ -93,9 +93,20 @@ class Slave(Actionable):
             sys.exit(0)
 
 
+def safe_eval(code, context=None):
+    glob = {'__builtins__': None}
+    if context:
+        glob.update(context)
+    return eval(code, glob)
+
+
 if __name__ == "__main__":
-    context = zmq.Context()
-    slave = Slave(context)
-    slave.connect()
-    gevent.spawn(slave.heartbeat_forever)
-    slave.listen_to_master()
+    try:
+        context = zmq.Context()
+        slave = Slave(context)
+        slave.connect()
+        gevent.spawn(slave.heartbeat_forever)
+        slave.listen_to_master()
+    except KeyboardInterrupt:
+        print('Telling master we quit')
+        slave.master.quit({'id': slave.id})

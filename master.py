@@ -1,6 +1,7 @@
 from py.shared import *
 from config import *
 import os
+import glob
 import bson
 import json
 import paste.urlparser
@@ -20,8 +21,10 @@ class MasterApplication(Actionable):
     handler = None
     slave_registry = {}
     next_slave_id = 0
+    next_websocket_id = 0
     testing = False
     websockets = ActionWrapper(None)  # Defaults to do nothing
+    test = {'actions':[]}
 
     def __init__(self, context):
         print('Master initialized')
@@ -60,6 +63,10 @@ class MasterApplication(Actionable):
                 reply = WebSocketReplyActionWrapper(ws)
                 self.websocket_actions.run_action(data, reply)
 
+    def get_websocket_id(self):
+        self.next_websocket_id += 1
+        return self.next_websocket_id - 1
+
     def listen_to_slaves(self):
         print('Listening to slaves')
         while True:
@@ -87,8 +94,10 @@ class MasterApplication(Actionable):
         return self.slave_registry[id]
 
     def remove_slave(self, id):
-        print('Killing slave {}'.format(id))
-        del self.slave_registry[id]
+        if id in self.slave_registry:
+            print('Killing slave {}'.format(id))
+            del self.slave_registry[id]
+        self.slaves.quit({'id': id})
         self.websockets.slave_disconnected({'id': id})
 
     def check_slaves(self):
@@ -97,8 +106,10 @@ class MasterApplication(Actionable):
         slave_ids = self.slave_registry.keys()
         for slave_id in slave_ids:
             slave = self.slave_registry[slave_id]
-            if slave.last_beat and the_time - slave.last_beat[0] > HEARTBEAT_PERIOD * BEATS_TO_KILL:
-                slave.kill()
+            if slave.last_beat and\
+               the_time - slave.last_beat[0] > HEARTBEAT_PERIOD * BEATS_TO_KILL and\
+               slave.last_beat[0] != 0:
+                self.remove_slave(slave_id)
 
     def watch_slaves(self):
         while True:
@@ -116,11 +127,6 @@ class Slave:
         the_time = int(time())
         self.last_beat = (the_time, data)
 
-    def kill(self):
-        # Ask it to quit gracefully, can't hurt
-        self.master.remove_slave(self.id)
-        self.master.slaves.quit({'targets': [self.id]})
-
 
 class MasterActions(Actionable):
     websockets = property(lambda self: self.master.websockets)
@@ -135,7 +141,7 @@ class SlaveActions(MasterActions):
     def connect(self, data):
         slave = Slave(self.master)
         self.master.register_slave(slave)
-        print("Slave connected!")
+        print("Slave {} connected!".format(slave.id))
         self.websockets.slave_connected({'id': slave.id})
         return {'id': slave.id}
 
@@ -148,12 +154,20 @@ class SlaveActions(MasterActions):
         slave.log_heartbeat(data)
         self.websockets.slave_heartbeat(data)
 
+    @action
+    def quit(self, data):
+        if not 'id' in data:
+            return {'error': 'id not specified'}
+
+        self.master.remove_slave(data['id'])
 
 @action_class
 class WebSocketActions(MasterActions):
     @action
     def connect(self, data, reply):
-        print('Websocket connected!')
+        id = self.master.get_websocket_id()
+        print('Websocket {} connected!'.format(id))
+        reply.set_id({'id': id})
 
     @action
     def quit(self, data, reply):
@@ -164,6 +178,50 @@ class WebSocketActions(MasterActions):
     def request_slaves(self, data, reply):
         data = {'slaves': dict((slave.id, slave.last_beat[1]) for slave in self.master.slave_registry.values())}
         reply.receive_slaves(data)
+
+    @action
+    def request_test(self, data, reply):
+        reply.receive_test({'test': self.master.test})
+
+    @action
+    def set_test_prop(self, data, reply):
+        print(data)
+        self.master.test[data['prop']] = data['value']
+        self.websockets.set_test_prop(data)
+
+    @action
+    def request_available_tests(self, data, reply):
+        tests_glob = os.path.join(os.path.dirname(__file__), TEST_DIR, '*.json')
+        files = glob.glob(tests_glob)
+        files_stripped = [os.path.basename(filename)[:-5] for filename in files]
+        reply.receive_available_tests({'tests': files_stripped})
+
+    @action
+    def load_test(self, data, reply):
+        filename = os.path.join(os.path.dirname(__file__), TEST_DIR, data['name'] + '.json')
+        if os.path.exists(filename):
+            with open(filename) as file:
+                self.master.test = json.loads(file.read())
+        self.websockets.receive_test({'test': self.master.test})
+
+    @action
+    def save_test(self, data, reply):
+        if 'name' in self.master.test:
+            filename = os.path.join(os.path.dirname(__file__), TEST_DIR, self.master.test['name'] + '.json')
+            with open(filename, 'w') as file:
+                file.write(json.dumps(self.master.test))
+            reply.save_successful()
+
+    @action
+    def add_action(self, data, reply):
+        self.master.test['actions'].insert(data['index'], {})
+        self.websockets.add_action(data)
+
+    @action
+    def set_action_prop(self, data, reply):
+        actions = self.master.test['actions']
+        if data['index'] in actions:
+            actions[data['index']][data['prop']] = data['value']
 
 
 if __name__ == "__main__":
