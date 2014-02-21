@@ -1,11 +1,95 @@
 <html ng-app="LoadFrock">
 <head>
-    <link href="css/bootstrap.min.css">
+    <link rel="stylesheet" href="css/bootstrap.min.css">
+    <link rel="stylesheet" href="css/app.css">
 </head>
 <body ng-controller="FrockBodyCtrl">
+    <div class="wrapper container">
+        <section class="title-section">
+            <h1>LoadFrock</h1>
+        </section>
+        <div class="col-md-4 col-xs-12">
+            <section ng-controller="SlaveCtrl" class="row slave-section">
+                <h2 class="center-title">Slaves</h2>
+                <div>
+                    <div ng-repeat="(id, slave) in slaves">
+                        <div ng-click="slave.detail_visible = !slave.detail_visible" class="slave-header">
+                            {{ slave.hostname }}
+                        </div>
+                        <div ng-hide="!slave.detail_visible" class="slave-body row">
+                            <h3>Memory</h3>
+                            <div class="col-sm-3 col-xs-12">
+                                Physical
+                            </div>
+                            <div class="col-sm-9 col-xs-12">
+                                <div class="progress">
+                                  <div class="progress-bar" role="progressbar" aria-valuenow="{{ slave.memory.physical[0] }}" aria-valuemin="0" aria-valuemax="{{ slave.memory.physical[1] }}" style="width: {{ slave.memory.physical[0]*100 / slave.memory.physical[1] }}%;">
+                                    {{ slave.memory.physical[0] | bytes }}/{{ slave.memory.physical[1] | bytes }}
+                                  </div>
+                                </div>
+                            </div>
+                            <!--
+                            <div class="col-sm-3 col-xs-12">
+                                Virtual
+                            </div>
+                            <div class="col-sm-9 col-xs-12">
+                                <div class="progress">
+                                  <div class="progress-bar" role="progressbar" aria-valuenow="{{ slave.memory.virtual[0] }}" aria-valuemin="0" aria-valuemax="{{ slave.memory.virtual[1] }}" style="width: {{ slave.memory.virtual[0]*100 / slave.memory.virtual[1] }}%;">
+                                    {{ slave.memory.virtual[0] | bytes }}/{{ slave.memory.virtual[1] | bytes }}
+                                  </div>
+                                </div>
+                            </div>
+                            -->
+                            <div class="col-sm-3 col-xs-12">
+                                Swap
+                            </div>
+                            <div class="col-sm-9 col-xs-12">
+                                <div class="progress">
+                                  <div class="progress-bar" role="progressbar" aria-valuenow="{{ slave.memory.swap[0] }}" aria-valuemin="0" aria-valuemax="{{ slave.memory.swap[1] }}" style="width: {{ slave.memory.swap[0]*100 / slave.memory.swap[1] }}%;">
+                                    {{ slave.memory.swap[0] | bytes }}/{{ slave.memory.swap[1] | bytes }}
+                                  </div>
+                                </div>
+                            </div>
+                            <div class="col-xs-12 col-sm-3">
+                                <h3>Load</h3>
+                            </div>
+                            <div class="col-xs-12 col-sm-9">
+                                <div class="progress">
+                                  <div class="progress-bar" role="progressbar" aria-valuenow="{{ slave.load }}" aria-valuemin="0" aria-valuemax="100" style="width: {{ slave.load }}%;">
+                                    {{ slave.load }}%
+                                  </div>
+                                </div>
+                            </div>
+                            <h3>Bandwidth</h3>
+                            <div class="col-xs-2">
+                                In
+                            </div>
+                            <div class="col-xs-5">
+                                {{ slave.bandwidth.in[0] | bytes }}/s
+                            </div>
+                            <div class="col-xs-5">
+                                {{ slave.bandwidth.in[1] | bytes }}
+                            </div>
 
+                            <div class="col-xs-2">
+                                Out
+                            </div>
+                            <div class="col-xs-5">
+                                {{ slave.bandwidth.out[0] | bytes }}/s
+                            </div>
+                            <div class="col-xs-5">
+                                {{ slave.bandwidth.out[1] | bytes }}
+                            </div>
+                            <button class="btn btn-danger" ng-click="kill_slave(slave.id)">
+                                Kill
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
     <script type="text/javascript" src="js/angular.js"></script>
-    <script type="text/javascript" src="js/bson.js"></script>
     <script type="text/javascript" src="js/app.js"></script>
 </body>
 </html>

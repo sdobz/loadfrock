@@ -1,0 +1,44 @@
+.wrapper {
+    background-color: #eee;
+}
+
+.title-section h1 {
+    margin-left: 40px;
+}
+
+.center-title {
+    text-align: center;
+}
+
+.slave-section {
+    background-color: #e8f3ff;
+    margin: 3px;
+    padding: 5px;
+    border-radius: 5px;
+}
+
+.slave-section h2 {
+    padding: 0px;
+    margin: 0px;
+}
+
+.slave-header {
+    background-color: white;
+    cursor: pointer;
+    border-radius: 5px;
+    padding: 5px;
+    margin-bottom: 5px;
+}
+.slave-header:hover {
+    background-color: #eee;
+}
+
+.slave-body {
+    padding: 15px;
+}
+.slave-body h3 {
+    margin-top: 0;
+}
+.progress-bar {
+    white-space: nowrap;
+}
