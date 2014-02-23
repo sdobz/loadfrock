@@ -62,6 +62,7 @@ app.service 'MasterService', ($rootScope) ->
       else
         callback()
     run_action: (action, data) ->
+      console.log 'Action', action, data
       if @connected
         if data == undefined
           data = {}
@@ -103,9 +104,14 @@ app.controller 'FrockBodyCtrl', ($scope, MasterService) ->
 app.service 'SlaveService', (MasterService) ->
   SlaveService =
     slaves: {}
-    kill_slave: (id) ->
+    sink_chooser: null
+    kill_slave: (slave) ->
       MasterService.run_action 'quit',
-        id: id
+        id: slave.id
+    pick_sink: (slave) ->
+      if @sink_chooser
+        @sink_chooser = null
+        console.log 'Setting slave(', @sink_chooser, ')s sink to slave(', slave.id ')'
 
   MasterService.register_connection_action ->
     MasterService.run_action 'request_slaves'

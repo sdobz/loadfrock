@@ -19,6 +19,9 @@ class Slave(Actionable):
     last_bw_in = None
     bw_in = 0
     total_bw_in = 0
+    running_tests = []
+    test_runner = None
+    sink = None
 
     def __init__(self, context):
         self.socket_out = context.socket(zmq.REQ)
@@ -42,7 +45,7 @@ class Slave(Actionable):
             print('Server sent message with no action')
 
     def connect(self):
-        self.id = slave.master.connect()['id']
+        self.id = self.master.connect()['id']
         print("Slave connected, id: {}".format(self.id))
 
     def heartbeat(self):
@@ -113,11 +116,19 @@ class Slave(Actionable):
             gevent.spawn(self.async_test, data)
 
 
-def safe_eval(code, context=None):
-    glob = {'__builtins__': None}
-    if context:
-        glob.update(context)
-    return eval(code, glob)
+class TestRunner:
+    def __init__(self, context):
+        pass
+
+    @staticmethod
+    def safe_eval(code, context=None):
+        glob = {'__builtins__': None}
+        if context:
+            glob.update(context)
+        return eval(code, glob)
+
+class Sink:
+    pass
 
 
 if __name__ == "__main__":

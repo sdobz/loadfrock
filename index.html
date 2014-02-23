@@ -14,11 +14,19 @@
                 <div>
                     <div ng-repeat="(id, slave) in slave_service.slaves">
                         <div ng-click="slave.detail_visible = !slave.detail_visible" class="slave-header">
+                            <span class="glyphicon glyphicon-save"
+                                  ng-if="slave.sink_id == slave.id"></span>
                             {{ slave.hostname }}
                             <span class="glyphicon glyphicon-remove-circle glyphicon-button pull-right"
-                                  ng-click="slave_service.kill_slave(slave.id)"></span>
+                                  ng-click="slave_service.kill_slave(slave)"></span>
+                            <span class="glyphicon glyphicon-screenshot glyphicon-button pull-right"
+                                  ng-if="slave_service.sink_chooser"
+                                  ng-click="slave_service.pick_sink(slave)"></span>
                         </div>
                         <div collapse="!slave.detail_visible" class="slave-body row">
+                            <button class="btn wide-button"
+                                    ng-click="slave_service.sink_chooser = slave.id"
+                                    ng-if="!slave_service.sink_chooser">Choose Sink</button>
                             <h3>Memory</h3>
                             <div class="col-sm-3 col-xs-12">
                                 Physical

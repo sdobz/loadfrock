@@ -73,6 +73,7 @@
         }
       },
       run_action: function(action, data) {
+        console.log('Action', action, data);
         if (this.connected) {
           if (data === void 0) {
             data = {};
@@ -131,10 +132,17 @@
     var SlaveService;
     SlaveService = {
       slaves: {},
-      kill_slave: function(id) {
+      sink_chooser: null,
+      kill_slave: function(slave) {
         return MasterService.run_action('quit', {
-          id: id
+          id: slave.id
         });
+      },
+      pick_sink: function(slave) {
+        if (this.sink_chooser) {
+          this.sink_chooser = null;
+          return console.log('Setting slave(', this.sink_chooser, ')s sink to slave(', slave.id(')'));
+        }
       }
     };
     MasterService.register_connection_action(function() {

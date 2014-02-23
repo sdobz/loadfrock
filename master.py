@@ -23,7 +23,6 @@ class MasterApplication(Actionable):
     next_client_id = 0
     clients = {}
     all_clients = ActionWrapper(None)  # Defaults to do nothing
-    all_clients_defined = False
 
     def __init__(self, context):
         print('Master initialized')
@@ -42,18 +41,22 @@ class MasterApplication(Actionable):
 
     def __call__(self, environ, start_response):
         ws = environ['wsgi.websocket']
-        if not self.all_clients_defined:
-            self.all_clients_defined = True
-            self.all_clients = WebSocketBroadcastActionWrapper(ws.handler)
+        print('Calling')
+        self.all_clients = WebSocketBroadcastActionWrapper(ws.handler)
 
         self.listen_to_websocket(ws)
 
     def listen_to_websocket(self, ws):
         client = self.register_client(ws)
+        print('Websocket {} connected!'.format(client.id))
         while True:
             try:
-                self.handle_websocket_message(client, ws.receive())
+                print('Websocket {} message'.format(client.id))
+                msg = ws.receive()
+                print(msg)
+                self.handle_websocket_message(client, msg)
             except WebSocketError:
+                print('Websocket {} connected'.format(client.id))
                 self.disconnect_client(client)
 
     def get_client_id(self):
@@ -62,7 +65,6 @@ class MasterApplication(Actionable):
 
     def register_client(self, ws):
         id = self.get_client_id()
-        print('Websocket {} connected!'.format(id))
         client = WebSocketReplyActionWrapper(ws, id=id)
         self.clients[id] = client
         return client
