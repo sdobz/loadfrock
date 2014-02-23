@@ -48,5 +48,9 @@ class WebSocketBroadcastActionWrapper(ActionWrapper):
 
 # Master to specific websocket reply, only available after receiving a message
 class WebSocketReplyActionWrapper(ActionWrapper):
+    def __init__(self, websocket, id):
+        self.item = websocket
+        self.id = id
+
     def run(self, data):
         self.item.send(json.dumps(data))

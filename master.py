@@ -18,13 +18,12 @@ from py.action_wrapper import ActionWrapper,\
 
 # http://css.dzone.com/articles/gevent-zeromq-websockets-and
 class MasterApplication(Actionable):
-    handler = None
     slave_registry = {}
     next_slave_id = 0
-    next_websocket_id = 0
-    testing = False
-    websockets = ActionWrapper(None)  # Defaults to do nothing
-    test = {'actions':[]}
+    next_client_id = 0
+    clients = {}
+    all_clients = ActionWrapper(None)  # Defaults to do nothing
+    all_clients_defined = False
 
     def __init__(self, context):
         print('Master initialized')
@@ -43,29 +42,41 @@ class MasterApplication(Actionable):
 
     def __call__(self, environ, start_response):
         ws = environ['wsgi.websocket']
-        self.handler = ws.handler
+        if not self.all_clients_defined:
+            self.all_clients_defined = True
+            self.all_clients = WebSocketBroadcastActionWrapper(ws.handler)
+
         self.listen_to_websocket(ws)
 
     def listen_to_websocket(self, ws):
-        print('Listening to websockets')
-        self.websockets = WebSocketBroadcastActionWrapper(ws.handler)
-
+        client = self.register_client(ws)
         while True:
             try:
-                self.handle_websocket_message(ws, ws.receive())
+                self.handle_websocket_message(client, ws.receive())
             except WebSocketError:
-                break
+                self.disconnect_client(client)
 
-    def handle_websocket_message(self, ws, msg):
+    def get_client_id(self):
+        self.next_client_id += 1
+        return self.next_client_id - 1
+
+    def register_client(self, ws):
+        id = self.get_client_id()
+        print('Websocket {} connected!'.format(id))
+        client = WebSocketReplyActionWrapper(ws, id=id)
+        self.clients[id] = client
+        return client
+
+    def handle_websocket_message(self, client, msg):
         if msg:
             data = json.loads(msg)
             if 'action' in data:
-                reply = WebSocketReplyActionWrapper(ws)
-                self.websocket_actions.run_action(data, reply)
+                data['id'] = client.id
+                self.websocket_actions.run_action(data, client)
 
-    def get_websocket_id(self):
-        self.next_websocket_id += 1
-        return self.next_websocket_id - 1
+    def disconnect_client(self, client):
+        if client.id in self.clients:
+            del self.clients[client.id]
 
     def listen_to_slaves(self):
         print('Listening to slaves')
@@ -98,7 +109,7 @@ class MasterApplication(Actionable):
             print('Killing slave {}'.format(id))
             del self.slave_registry[id]
         self.slaves.quit({'id': id})
-        self.websockets.slave_disconnected({'id': id})
+        self.all_clients.slave_disconnected({'id': id})
 
     def check_slaves(self):
         the_time = int(time())
@@ -127,9 +138,13 @@ class Slave:
         the_time = int(time())
         self.last_beat = (the_time, data)
 
+    def test_result(self, data):
+        if 'id' in data:
+            self.master.clients[data['id']].test_result(data)
+
 
 class MasterActions(Actionable):
-    websockets = property(lambda self: self.master.websockets)
+    all_clients = property(lambda self: self.master.all_clients)
     slaves = property(lambda self: self.master.slaves)
 
     def __init__(self, master):
@@ -142,7 +157,7 @@ class SlaveActions(MasterActions):
         slave = Slave(self.master)
         self.master.register_slave(slave)
         print("Slave {} connected!".format(slave.id))
-        self.websockets.slave_connected({'id': slave.id})
+        self.all_clients.slave_connected({'id': slave.id})
         return {'id': slave.id}
 
     @action
@@ -152,7 +167,7 @@ class SlaveActions(MasterActions):
 
         slave = self.master.get_slave(data['id'])
         slave.log_heartbeat(data)
-        self.websockets.slave_heartbeat(data)
+        self.all_clients.slave_heartbeat(data)
 
     @action
     def quit(self, data):
@@ -161,68 +176,80 @@ class SlaveActions(MasterActions):
 
         self.master.remove_slave(data['id'])
 
+    @action
+    def test_result(self, data):
+        if 'id' in data:
+            self.master.clients[data['id']].test_result(data)
+
+
 @action_class
 class WebSocketActions(MasterActions):
     @action
-    def connect(self, data, reply):
-        id = self.master.get_websocket_id()
-        print('Websocket {} connected!'.format(id))
-        reply.set_id({'id': id})
-
-    @action
     def quit(self, data, reply):
-        self.master.remove_slave(data['id'])
-        self.slaves.quit(data)
+        if 'id' in data:
+            self.master.remove_slave(data['id'])
+            self.slaves.quit(data)
+        else:
+            reply.error({'error': 'Id not specified in data'})
 
     @action
-    def request_slaves(self, data, reply):
+    def request_slaves(self, data, client):
         data = {'slaves': dict((slave.id, slave.last_beat[1]) for slave in self.master.slave_registry.values())}
-        reply.receive_slaves(data)
+        client.receive_slaves(data)
 
     @action
-    def request_test(self, data, reply):
-        reply.receive_test({'test': self.master.test})
-
-    @action
-    def set_test_prop(self, data, reply):
-        print(data)
-        self.master.test[data['prop']] = data['value']
-        self.websockets.set_test_prop(data)
-
-    @action
-    def request_available_tests(self, data, reply):
+    def request_available_tests(self, data, client):
         tests_glob = os.path.join(os.path.dirname(__file__), TEST_DIR, '*.json')
         files = glob.glob(tests_glob)
         files_stripped = [os.path.basename(filename)[:-5] for filename in files]
-        reply.receive_available_tests({'tests': files_stripped})
+        client.receive_available_tests({'tests': files_stripped})
 
     @action
-    def load_test(self, data, reply):
+    def request_test(self, data, client):
         filename = os.path.join(os.path.dirname(__file__), TEST_DIR, data['name'] + '.json')
         if os.path.exists(filename):
             with open(filename) as file:
-                self.master.test = json.loads(file.read())
-        self.websockets.receive_test({'test': self.master.test})
+                return client.receive_test({'test': json.loads(file.read())})
+        return client.error({'error': 'Test not found'})
 
     @action
-    def save_test(self, data, reply):
-        if 'name' in self.master.test:
-            filename = os.path.join(os.path.dirname(__file__), TEST_DIR, self.master.test['name'] + '.json')
-            with open(filename, 'w') as file:
-                file.write(json.dumps(self.master.test))
-            reply.save_successful()
+    def save_test(self, data, client):
+        if 'test' in data:
+            test = data['test']
+            if 'name' in test:
+                filename = os.path.join(os.path.dirname(__file__), TEST_DIR, test['name'] + '.json')
+                with open(filename, 'w') as file:
+                    file.write(json.dumps(test))
+                client.save_successful()
 
     @action
-    def add_action(self, data, reply):
-        self.master.test['actions'].insert(data['index'], {})
-        self.websockets.add_action(data)
+    def delete_test(self, data, client):
+        if 'test_name' in data:
+            filename = os.path.join(os.path.dirname(__file__), TEST_DIR, data['test_name'] + '.json')
+            if os.path.exists(filename):
+                os.remove(filename)
+            else:
+                return client.error({'error': 'Test not found'})
+        else:
+            return client.error({'error': 'Cannot delete test, not found'})
 
     @action
-    def set_action_prop(self, data, reply):
-        actions = self.master.test['actions']
-        if data['index'] in actions:
-            actions[data['index']][data['prop']] = data['value']
+    def run_test(self, data, client):
+        if 'test' in data:
+            if 'runs' in data['test']:
+                try:
+                    data['runs'] = int(data['test']['runs'])/len(self.master.slave_registry)
+                except ValueError:
+                    data['runs'] = 1
+            else:
+                data['runs'] = 1
+            self.master.slaves.run_test(data)
+            client.test_running()
 
+    @action
+    def stop_test(self, data, client):
+        self.master.slaves.stop_test(data)
+        client.test_stopped()
 
 if __name__ == "__main__":
     print('WLOCOM TO TEH LODE OF ETST')

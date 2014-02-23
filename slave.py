@@ -9,6 +9,7 @@ import gevent
 import sys
 import socket
 
+
 @action_class
 class Slave(Actionable):
     id = None
@@ -86,11 +87,30 @@ class Slave(Actionable):
             self.heartbeat()
             gevent.sleep(HEARTBEAT_PERIOD)
 
+    def async_test(self, data):
+        print('Starting async test')
+        client_id = data['id']
+        context = {}
+        runs = data.get('runs', 1)
+        for test_num in xrange(0, runs):
+            self.master.test_result({'id': client_id,
+                                     'slave_id': self.id,
+                                     'message': 'Ran test {}'.format(test_num)})
+            gevent.sleep(.1)
+
+    def test_error(self, client_id, error_str):
+        self.master.test_result({'id': client_id, 'error': error_str})
+
     @action
     def quit(self, data):
         if 'id' not in data or data['id'] == self.id:
             print('Master told us to quit, quitting.')
             sys.exit(0)
+
+    @action
+    def run_test(self, data):
+        if 'id' in data:
+            gevent.spawn(self.async_test, data)
 
 
 def safe_eval(code, context=None):

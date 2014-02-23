@@ -1,4 +1,4 @@
-app = angular.module 'LoadFrock', ['ui.bootstrap']
+app = angular.module 'LoadFrock', ['ui.bootstrap', 'dragger']
 
 app.filter 'bytes', ->
 	(bytes, precision) ->
@@ -9,6 +9,41 @@ app.filter 'bytes', ->
 		units = ['bytes', 'kB', 'MB', 'GB', 'TB', 'PB']
 		number = Math.floor Math.log(bytes) / Math.log(1024)
 		return (bytes / Math.pow(1024, Math.floor(number))).toFixed(precision) +  ' ' + units[number]
+
+app.directive 'autoGrow', ->
+	(scope, element, attr) ->
+    minHeight = element[0].offsetHeight
+    paddingLeft = element.css('paddingLeft')
+    paddingRight = element.css('paddingRight')
+
+    $shadow = angular.element('<div></div>').css
+      position: 'absolute',
+      top: -10000
+      left: -10000
+      width: element[0].offsetWidth - parseInt(paddingLeft || 0) - parseInt(paddingRight || 0)
+      fontSize: element.css('fontSize')
+      fontFamily: element.css('fontFamily')
+      lineHeight: element.css('lineHeight')
+      resize:     'none'
+    angular.element(document.body).append $shadow
+
+    update = ->
+      times = (string, number) ->
+        Array(number+1).join string
+
+      val = element.val().replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/&/g, '&amp;')
+        .replace(/\n$/, '<br/>&nbsp;')
+        .replace(/\n/g, '<br/>')
+        .replace(/\s{2,}/g, (space) -> times('&nbsp;', space.length - 1) + ' ')
+      $shadow.html(val)
+
+      element.css('height', Math.max($shadow[0].offsetHeight + 10, minHeight) + 'px')
+
+    element.bind('keyup keydown keypress change focus', update)
+    update()
+
 
 WEBSOCKET_PORT = 5577
 
@@ -36,7 +71,6 @@ app.service 'MasterService', ($rootScope) ->
   ws.onopen = ->
     $rootScope.$apply ->
       MasterService.connected = true
-      MasterService.run_action 'connect'
       for connection_action in MasterService.connection_actions
         connection_action()
 
@@ -55,15 +89,20 @@ app.service 'MasterService', ($rootScope) ->
     console.log 'Given id: ', data['id']
     MasterService.id = data['id']
 
+  MasterService.register_action 'error', (data) ->
+    console.log 'Got error ', data['error']
+
   return MasterService
 
 
 app.controller 'FrockBodyCtrl', ($scope, MasterService) ->
   $scope.connection = MasterService
+  $scope.show_test = true
+  $scope.show_results = false
 
 app.service 'SlaveService', (MasterService) ->
   SlaveService =
-    slaves: []
+    slaves: {}
     kill_slave: (id) ->
       MasterService.run_action 'quit',
         id: id
@@ -100,60 +139,25 @@ app.service 'Test', (MasterService) ->
     base: ''
     actions: []
 
-    send_test_prop: (prop) ->
-      console.log Test
-      MasterService.run_action 'set_test_prop',
-        source: MasterService.id
-        prop: prop
-        value: Test[prop]
-
-    send_action_prop: (index, prop) ->
-      MasterService.run_action 'set_action_prop',
-        source: MasterService.id
-        index: index
-        prop: prop
-        value: Test.actions[index][prop]
-
-    add_action: (index) ->
-      MasterService.run_action 'add_action',
-        source: MasterService.id
-        index: index
-
     save_alert_visible: false
     save: ->
-      MasterService.run_action 'save_test'
+      MasterService.run_action 'save_test',
+        test: Test
 
-  MasterService.register_connection_action ->
-    MasterService.run_action 'request_test'
+    add_action: (index) ->
+      Test.actions.splice index, 0, {}
+
+    delete_action: (index) ->
+      Test.actions.splice index, 1
+
   MasterService.register_action 'receive_test', (data) ->
     angular.extend Test, data['test']
 
-  MasterService.register_action 'set_test_prop', (data) ->
-    if data['source'] != MasterService.id
-      Test[data['prop']] = data['value']
-
-  MasterService.register_action 'set_action_prop', (data) ->
-    if data['source'] != MasterService.id
-      Test.actions[data['index']][data['prop']] = data['value']
-
-  MasterService.register_action 'add_action', (data) ->
-    Test.actions.splice(data['index'], 0, {})
-
   MasterService.register_action 'save_successful', ->
+    console.log 'Save ok'
     Test.save_alert_visible = true
 
   return Test
-
-app.controller 'TestCtrl', ($scope, Test, $modal) ->
-  $scope.test = Test
-
-  $scope.send_test_prop = Test.send_test_prop
-  $scope.send_action_prop = Test.send_action_prop
-
-  $scope.open_load_modal = ->
-    $modal.open
-      templateUrl: 'load_modal.html'
-      controller: LoadModalCtrl
 
 app.service 'TestLoader', (MasterService) ->
   TestLoader =
@@ -162,7 +166,7 @@ app.service 'TestLoader', (MasterService) ->
       MasterService.run_action 'request_available_tests'
 
     load_test: (test_name) ->
-      MasterService.run_action 'load_test',
+      MasterService.run_action 'request_test',
         name: test_name
 
   MasterService.register_action 'receive_available_tests', (data) ->
@@ -170,17 +174,70 @@ app.service 'TestLoader', (MasterService) ->
 
   return TestLoader
 
+app.controller 'TestCtrl', ($scope, Test, TestLoader, TestRunner, ResultsService, $modal) ->
+  $scope.test = Test
+  $scope.test_runner = TestRunner
 
-LoadModalCtrl = ($scope, $modalInstance, TestLoader) ->
+  $scope.open_load_modal = ->
+    $modal.open
+      templateUrl: 'load_modal.html'
+      controller: TestLoaderCtrl
+    .result.then (test_name) ->
+      TestLoader.load_test test_name
+
+  $scope.open_delete_action_modal = (index) ->
+    scope = $scope.$new true
+    scope.action = Test.actions[index]
+    $modal.open
+      templateUrl: 'action_delete.html'
+      scope: scope
+    .result.then ->
+      Test.delete_action index
+
+
+TestLoaderCtrl = ($scope, $modal, TestLoader, MasterService) ->
   $scope.test_loader = TestLoader
   TestLoader.load_available()
 
-  $scope.load = (test_name) ->
-    TestLoader.load_test test_name
-    $modalInstance.close ''
+  $scope.open_delete_test_modal = (test_name) ->
+    scope = $scope.$new true
+    scope.test_name = test_name
+    $modal.open
+      templateUrl: 'test_delete.html'
+      scope: scope
+    .result.then ->
+      MasterService.run_action 'delete_test',
+        test_name: test_name
+      TestLoader.load_available()
 
-  $scope.cancel = ->
-    $modalInstance.dismiss ''
+app.service 'TestRunner', (MasterService, Test) ->
+  TestRunner =
+    running: false
+    run: ->
+      TestRunner.running = true
+      MasterService.run_action 'run_test',
+        id: MasterService.id
+        test: Test
+    stop: ->
+      MasterService.run_action 'stop_test',
+        id: MasterService.id
+        test: Test
 
+  MasterService.register_action 'test_running', (data) ->
+    TestRunner.running = true
+  MasterService.register_action 'test_stopped', (data) ->
+    TestRunner.running = false
 
-app.controller 'ActionCtrl', ($scope, ActionServer) ->
+  return TestRunner
+
+app.service 'ResultsService', (MasterService) ->
+  ResultService =
+    runs: 0
+    start: 0
+    duration: 0
+    actions: []
+
+  MasterService.register_action 'test_result', (data) ->
+    console.log 'Got result ', data
+
+  return ResultService
