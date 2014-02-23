@@ -41,7 +41,6 @@ class MasterApplication(Actionable):
 
     def __call__(self, environ, start_response):
         ws = environ['wsgi.websocket']
-        print('Calling')
         self.all_clients = WebSocketBroadcastActionWrapper(ws.handler)
 
         self.listen_to_websocket(ws)
@@ -49,15 +48,14 @@ class MasterApplication(Actionable):
     def listen_to_websocket(self, ws):
         client = self.register_client(ws)
         print('Websocket {} connected!'.format(client.id))
+
         while True:
             try:
-                print('Websocket {} message'.format(client.id))
                 msg = ws.receive()
-                print(msg)
                 self.handle_websocket_message(client, msg)
-            except WebSocketError:
-                print('Websocket {} connected'.format(client.id))
+            except WebSocketError as e:
                 self.disconnect_client(client)
+                break
 
     def get_client_id(self):
         self.next_client_id += 1
