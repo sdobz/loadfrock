@@ -47,11 +47,13 @@ app.directive 'autoGrow', ->
 
 WEBSOCKET_PORT = 5577
 
-app.service 'MasterService', ($rootScope) ->
-  ws = new WebSocket('ws://localhost:' + WEBSOCKET_PORT)
+app.service 'MasterService', ($rootScope, $timeout) ->
+  ws = null
+  connect = ->
+    ws = new WebSocket('ws://localhost:' + WEBSOCKET_PORT)
+  connect()
   MasterService =
     connected: false
-    id: null
     connection_actions: []
     actions: {}
     register_action: (action, callback) ->
@@ -62,7 +64,6 @@ app.service 'MasterService', ($rootScope) ->
       else
         callback()
     run_action: (action, data) ->
-      console.log 'Action', action, data
       if @connected
         if data == undefined
           data = {}
@@ -86,10 +87,6 @@ app.service 'MasterService', ($rootScope) ->
         $rootScope.$apply ->
           MasterService.actions[data['action']](data)
 
-  MasterService.register_action 'set_id', (data) ->
-    console.log 'Given id: ', data['id']
-    MasterService.id = data['id']
-
   MasterService.register_action 'error', (data) ->
     console.log 'Got error ', data['error']
 
@@ -106,31 +103,60 @@ app.service 'SlaveService', (MasterService) ->
     slaves: {}
     sink_chooser: null
     kill_slave: (slave) ->
+      console.log 'Killing slave', slave.slave_id
       MasterService.run_action 'quit',
-        id: slave.id
-    pick_sink: (slave) ->
-      if @sink_chooser
+        slave_id: slave.slave_id
+    begin_choosing: (slave) ->
+      @sink_chooser = slave
+    choosing_sink: ->
+      @sink_chooser != null
+    choose_sink: (slave) ->
+      if @sink_chooser != null
+        console.log 'Setting slave(', @sink_chooser.slave_id, ')s sink to slave(', slave.slave_id, ')'
+        MasterService.run_action 'set_sink',
+          slave_id: @sink_chooser.slave_id
+          sink_id: slave.slave_id
         @sink_chooser = null
-        console.log 'Setting slave(', @sink_chooser, ')s sink to slave(', slave.id ')'
+    sink_usages: (checking_slave) ->
+      usages = 0
+      for id, slave of @slaves
+        if slave.sink_id == checking_slave.slave_id
+          usages += 1
+      return usages
+
+  calculate_sink_usages = ->
+    for id, slave of SlaveService.slaves
+      slave.sink_usages = 0
+      slave.has_sink = false
+    for id, slave of SlaveService.slaves
+      if slave.sink_id
+        if SlaveService.slaves[slave.sink_id]
+          slave.has_sink = true
+          SlaveService.slaves[slave.sink_id].sink_usages += 1
+
 
   MasterService.register_connection_action ->
     MasterService.run_action 'request_slaves'
   MasterService.register_action 'receive_slaves', (data) ->
     angular.extend SlaveService.slaves, data['slaves']
-
-  MasterService.register_action 'slave_connected', (data) ->
-    if not SlaveService.slaves[data['id']]
-      SlaveService.slaves[data['id']] = {}
-    angular.extend SlaveService.slaves[data['id']], data
+    calculate_sink_usages()
 
   MasterService.register_action 'slave_disconnected', (data) ->
-    if SlaveService.slaves[data['id']]
-      delete SlaveService.slaves[data['id']]
+    delete SlaveService.slaves[data['slave_id']]
+    calculate_sink_usages()
 
   MasterService.register_action 'slave_heartbeat', (data) ->
-    if not SlaveService.slaves[data['id']]
-      SlaveService.slaves[data['id']] = {}
-    angular.extend SlaveService.slaves[data['id']], data
+    if data['slave_id']
+      if not SlaveService.slaves[data['slave_id']]
+        SlaveService.slaves[data['slave_id']] = {}
+        console.log 'Slave ', data['slave_id'], 'connected'
+      angular.extend SlaveService.slaves[data['slave_id']], data
+      calculate_sink_usages()
+
+  MasterService.register_action 'slave_set_sink', (data) ->
+    SlaveService.slaves[data['slave_id']].sink_id = data['sink_id']
+    console.log 'Slave', data['slave_id'], 'has connected to sink', data['sink_id']
+    calculate_sink_usages()
 
 
   return SlaveService
@@ -222,11 +248,9 @@ app.service 'TestRunner', (MasterService, Test) ->
     run: ->
       TestRunner.running = true
       MasterService.run_action 'run_test',
-        id: MasterService.id
         test: Test
     stop: ->
       MasterService.run_action 'stop_test',
-        id: MasterService.id
         test: Test
 
   MasterService.register_action 'test_running', (data) ->

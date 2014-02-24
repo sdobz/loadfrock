@@ -42,16 +42,28 @@ body {
     border-radius: 5px;
     padding: 5px;
     margin-bottom: 5px;
-}
-.slave-header .glyphicon-button {
-    margin-top: -.2em;
+    display: block;
+    position: relative;
+    z-index: 5;
 }
 .slave-header:hover {
     background-color: #eee;
 }
 
+.slave-controls {
+    background-color: #ffe4ad;
+    display: block;
+    margin-left: 50%;
+    width: 50%;
+    margin-top: -10px;
+    padding: 5px;
+    margin-bottom: 5px;
+    border-bottom-left-radius: 5px;
+    border-bottom-right-radius: 5px;
+}
+
 .slave-body {
-    padding: 15px;
+    padding: 0 15px 15px 15px;
 }
 .slave-body h3 {
     margin-top: 0;
@@ -91,6 +103,9 @@ body {
     margin-left: 5px;
     font-size: 1.35em;
 }
+.glyphicon-large {
+    font-size: 1.35em;
+}
 
 .alert.save-successful {
     cursor: pointer;
@@ -106,7 +121,6 @@ body {
     padding-top: 12px;
     margin-bottom: 5px;
     position: relative;
-    z-index: 10;
 }
 
 .action-left-button {
@@ -124,7 +138,6 @@ body {
     background-color: #fffde1;
     padding-top: 20px;
     margin-top: -10px;
-    z-index: 10;
 }
 
 textarea {

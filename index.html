@@ -2,32 +2,42 @@
 <head>
     <link rel="stylesheet" href="css/bootstrap.min.css">
     <link rel="stylesheet" href="css/app.css">
+    <title>Load Frock</title>
 </head>
 <body ng-controller="FrockBodyCtrl">
     <div class="wrapper container">
         <section class="text-center title-section">
             <h1>LoadFrock</h1>
+            <h3 ng-hide="connection.connected">
+                Not Connected
+                <span class="glyphicon glyphicon-exclamation-sign center-text">
+            </h3>
         </section>
         <div class="col-md-4 col-xs-12">
-            <section ng-controller="SlaveCtrl" class="row slave-section">
+            <section ng-controller="SlaveCtrl" class="slave-section">
                 <h2 class="text-center">Slaves</h2>
                 <div>
                     <div ng-repeat="(id, slave) in slave_service.slaves">
                         <div ng-click="slave.detail_visible = !slave.detail_visible" class="slave-header">
+                            #{{slave.slave_id}}
                             <span class="glyphicon glyphicon-save"
-                                  ng-if="slave.sink_id == slave.id"></span>
+                                  ng-if="slave.sink_usages > 0">({{ slave.sink_usages }})</span>
                             {{ slave.hostname }}
-                            <span class="glyphicon glyphicon-remove-circle glyphicon-button pull-right"
-                                  ng-click="slave_service.kill_slave(slave)"></span>
-                            <span class="glyphicon glyphicon-screenshot glyphicon-button pull-right"
-                                  ng-if="slave_service.sink_chooser"
-                                  ng-click="slave_service.pick_sink(slave)"></span>
                         </div>
-                        <div collapse="!slave.detail_visible" class="slave-body row">
-                            <button class="btn wide-button"
-                                    ng-click="slave_service.sink_chooser = slave.id"
-                                    ng-if="!slave_service.sink_chooser">Choose Sink</button>
-                            <h3>Memory</h3>
+                        <div class="slave-controls">
+                                <span class="glyphicon glyphicon-open glyphicon-button"
+                                      ng-click="slave_service.begin_choosing(slave)"
+                                      ng-class="{'text-danger': !slave_service.slaves[slave.sink_id]}"
+                                      ng-if="!slave_service.choosing_sink()"></span>
+                                <span class="glyphicon glyphicon-screenshot glyphicon-button"
+                                      ng-if="slave_service.choosing_sink()"
+                                      ng-click="slave_service.choose_sink(slave)"></span>
+                                <span ng-if="slave_service.slaves[slave.sink_id]">#{{ slave.sink_id }}</span>
+                                <span class="glyphicon glyphicon-remove-circle glyphicon-button pull-right"
+                                      ng-click="slave_service.kill_slave(slave)"></span>
+                        </div>
+                        <div collapse="!slave.detail_visible" class="slave-body">
+                            <h3>Memory {{slave.id}}</h3>
                             <div class="col-sm-3 col-xs-12">
                                 Physical
                             </div>
@@ -90,6 +100,7 @@
                             <div class="col-xs-5">
                                 {{ slave.bandwidth.out[1] | bytes }}
                             </div>
+                            <div class="clearfix"></div>
                         </div>
                     </div>
                 </div>

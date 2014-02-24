@@ -54,12 +54,15 @@
 
   WEBSOCKET_PORT = 5577;
 
-  app.service('MasterService', function($rootScope) {
-    var MasterService, ws;
-    ws = new WebSocket('ws://localhost:' + WEBSOCKET_PORT);
+  app.service('MasterService', function($rootScope, $timeout) {
+    var MasterService, connect, ws;
+    ws = null;
+    connect = function() {
+      return ws = new WebSocket('ws://localhost:' + WEBSOCKET_PORT);
+    };
+    connect();
     MasterService = {
       connected: false,
-      id: null,
       connection_actions: [],
       actions: {},
       register_action: function(action, callback) {
@@ -73,7 +76,6 @@
         }
       },
       run_action: function(action, data) {
-        console.log('Action', action, data);
         if (this.connected) {
           if (data === void 0) {
             data = {};
@@ -112,10 +114,6 @@
         }
       }
     };
-    MasterService.register_action('set_id', function(data) {
-      console.log('Given id: ', data['id']);
-      return MasterService.id = data['id'];
-    });
     MasterService.register_action('error', function(data) {
       return console.log('Got error ', data['error']);
     });
@@ -129,44 +127,95 @@
   });
 
   app.service('SlaveService', function(MasterService) {
-    var SlaveService;
+    var SlaveService, calculate_sink_usages;
     SlaveService = {
       slaves: {},
       sink_chooser: null,
       kill_slave: function(slave) {
+        console.log('Killing slave', slave.slave_id);
         return MasterService.run_action('quit', {
-          id: slave.id
+          slave_id: slave.slave_id
         });
       },
-      pick_sink: function(slave) {
-        if (this.sink_chooser) {
-          this.sink_chooser = null;
-          return console.log('Setting slave(', this.sink_chooser, ')s sink to slave(', slave.id(')'));
+      begin_choosing: function(slave) {
+        return this.sink_chooser = slave;
+      },
+      choosing_sink: function() {
+        return this.sink_chooser !== null;
+      },
+      choose_sink: function(slave) {
+        if (this.sink_chooser !== null) {
+          console.log('Setting slave(', this.sink_chooser.slave_id, ')s sink to slave(', slave.slave_id, ')');
+          MasterService.run_action('set_sink', {
+            slave_id: this.sink_chooser.slave_id,
+            sink_id: slave.slave_id
+          });
+          return this.sink_chooser = null;
+        }
+      },
+      sink_usages: function(checking_slave) {
+        var id, slave, usages, _ref;
+        usages = 0;
+        _ref = this.slaves;
+        for (id in _ref) {
+          slave = _ref[id];
+          if (slave.sink_id === checking_slave.slave_id) {
+            usages += 1;
+          }
+        }
+        return usages;
+      }
+    };
+    calculate_sink_usages = function() {
+      var id, slave, _ref, _ref1, _results;
+      _ref = SlaveService.slaves;
+      for (id in _ref) {
+        slave = _ref[id];
+        slave.sink_usages = 0;
+        slave.has_sink = false;
+      }
+      _ref1 = SlaveService.slaves;
+      _results = [];
+      for (id in _ref1) {
+        slave = _ref1[id];
+        if (slave.sink_id) {
+          if (SlaveService.slaves[slave.sink_id]) {
+            slave.has_sink = true;
+            _results.push(SlaveService.slaves[slave.sink_id].sink_usages += 1);
+          } else {
+            _results.push(void 0);
+          }
+        } else {
+          _results.push(void 0);
         }
       }
+      return _results;
     };
     MasterService.register_connection_action(function() {
       return MasterService.run_action('request_slaves');
     });
     MasterService.register_action('receive_slaves', function(data) {
-      return angular.extend(SlaveService.slaves, data['slaves']);
-    });
-    MasterService.register_action('slave_connected', function(data) {
-      if (!SlaveService.slaves[data['id']]) {
-        SlaveService.slaves[data['id']] = {};
-      }
-      return angular.extend(SlaveService.slaves[data['id']], data);
+      angular.extend(SlaveService.slaves, data['slaves']);
+      return calculate_sink_usages();
     });
     MasterService.register_action('slave_disconnected', function(data) {
-      if (SlaveService.slaves[data['id']]) {
-        return delete SlaveService.slaves[data['id']];
-      }
+      delete SlaveService.slaves[data['slave_id']];
+      return calculate_sink_usages();
     });
     MasterService.register_action('slave_heartbeat', function(data) {
-      if (!SlaveService.slaves[data['id']]) {
-        SlaveService.slaves[data['id']] = {};
+      if (data['slave_id']) {
+        if (!SlaveService.slaves[data['slave_id']]) {
+          SlaveService.slaves[data['slave_id']] = {};
+          console.log('Slave ', data['slave_id'], 'connected');
+        }
+        angular.extend(SlaveService.slaves[data['slave_id']], data);
+        return calculate_sink_usages();
       }
-      return angular.extend(SlaveService.slaves[data['id']], data);
+    });
+    MasterService.register_action('slave_set_sink', function(data) {
+      SlaveService.slaves[data['slave_id']].sink_id = data['sink_id'];
+      console.log('Slave', data['slave_id'], 'has connected to sink', data['sink_id']);
+      return calculate_sink_usages();
     });
     return SlaveService;
   });
@@ -274,13 +323,11 @@
       run: function() {
         TestRunner.running = true;
         return MasterService.run_action('run_test', {
-          id: MasterService.id,
           test: Test
         });
       },
       stop: function() {
         return MasterService.run_action('stop_test', {
-          id: MasterService.id,
           test: Test
         });
       }

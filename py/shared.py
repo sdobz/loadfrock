@@ -27,3 +27,17 @@ class Actionable(object):
         if 'action' not in data or data['action'] not in self.actions:
             return {'error': 'Unknown action'}
         return getattr(self, data['action'])(data, *args, **kwargs)
+
+
+class Sender:
+    def __init__(self, send_method):
+        self.send_method = send_method
+
+    def __getattr__(self, action):
+        if self.send_method:
+            def go_for_it(data=None):
+                if not data:
+                    data = {}
+                data['action'] = action
+                return self.send_method(data)
+            return go_for_it
