@@ -9,7 +9,9 @@ import psutil
 import gevent
 import sys
 import socket
-
+import random
+import grequests
+from requests import Session
 
 @action_class
 class Slave(Actionable):
@@ -24,6 +26,7 @@ class Slave(Actionable):
     test_runner = None
     sink_obj = None
     sink = None
+    client_tests = {}
     message_lock = BoundedSemaphore(1)
 
     def __init__(self, context):
@@ -41,9 +44,14 @@ class Slave(Actionable):
     def send_to_master(self, data):
         if self.id:
             data['slave_id'] = self.id
-        with Slave.message_lock:
-            self.socket_out.send(bson.dumps(data))
-            resp = bson.loads(self.socket_out.recv())
+        self.message_lock.acquire()
+        if data['action'] != 'heartbeat':
+            print('MASTER->{}'.format(data['action']))
+        self.socket_out.send(bson.dumps(data))
+        resp = bson.loads(self.socket_out.recv())
+        if data['action'] != 'heartbeat':
+            print('MASTER->{} end'.format(data['action']))
+        self.message_lock.release()
         self.check_for_id(resp)
         return resp
 
@@ -66,28 +74,11 @@ class Slave(Actionable):
         data = bson.loads(msg)
         if 'action' in data:
             if 'slave_id' not in data or data['slave_id'] == self.id:
+                print('{}<-MASTER'.format(data['action']))
                 self.run_action(data)
+                print('{}<-MASTER end'.format(data['action']))
         else:
             print('Server sent message with no action')
-
-    @staticmethod
-    def hostname():
-        return socket.gethostname()
-
-    def connect_to_sink(self, sink_id, host):
-        print('Attempting to connect to sink({}) - {}'.format(sink_id, host))
-        if self.sink_obj:
-            self.sink_obj.close()
-        self.sink_obj = Sink(id=sink_id,
-                             host=host,
-                             slave=self)
-
-        if self.sink_obj.setup():
-            print('Ok!')
-            self.sink = Sender(self.send_to_sink)
-            self.master.connected_to_sink({
-                'sink_id': self.sink_obj.id
-            })
 
     def heartbeat(self):
         physical_memory = psutil.phymem_usage()
@@ -131,29 +122,29 @@ class Slave(Actionable):
             self.heartbeat()
             gevent.sleep(HEARTBEAT_PERIOD)
 
-    def async_test(self, data):
-        print('Starting async test')
-        client_id = data['client_id']
-        if not self.sink_obj:
-            print('Error, no sink')
-            return self.test_error(client_id, 'Slave({}) has no sink'.format(self.id))
-
-        context = {}
-        runs = data.get('runs', 1)
-        for test_num in xrange(0, runs):
-            print('Eunning test')
-            self.sink.test_result({'client_id': client_id,
-                                        'slave_id': self.id,
-                                        'message': 'Ran test {}'.format(test_num)})
-            gevent.sleep(.1)
-
-    def test_error(self, client_id, error_str):
-        self.master.test_result({'id': client_id, 'error': error_str})
-
     @action
     def set_sink(self, data):
         if 'sink_id' in data and 'sink_host' in data and data['sink_host'] == self.sink_host:
             self.connect_to_sink(data['sink_id'], data['sink_host'])
+
+    @staticmethod
+    def hostname():
+        return socket.gethostname()
+
+    def connect_to_sink(self, sink_id, host):
+        print('Attempting to connect to sink({}) - {}'.format(sink_id, host))
+        if self.sink_obj:
+            self.sink_obj.close()
+        self.sink_obj = Sink(id=sink_id,
+                             host=host,
+                             slave=self)
+
+        if self.sink_obj.setup():
+            print('Ok!')
+            self.sink = Sender(self.send_to_sink)
+            self.master.connected_to_sink({
+                'sink_id': self.sink_obj.id
+            })
 
     @action
     def quit(self, data):
@@ -162,23 +153,147 @@ class Slave(Actionable):
 
     @action
     def run_test(self, data):
+        print('slave({}).run_test client({})'.format(self.id, data['client_id']))
+        if not self.sink_obj:
+            print('Error, no sink')
+            return self.master.error({
+                'client_id': data['client_id'],
+                'error': 'Slave({}) has no sink'.format(self.id)
+            })
         if 'test' in data:
-            gevent.spawn(self.async_test, data)
+            client_id = data['client_id']
+            test = Test(self.sink, data)
+            if client_id in self.client_tests:
+                print('    Pre-empt stop test')
+                self.client_tests[client_id].stop()
 
+            self.client_tests[data['client_id']] = test
+            test.run()
         else:
             raise Exception('No test given')
 
+    @action
+    def stop_test(self, data):
+        client_id = data['client_id']
+        if self.sink_obj:
+            if client_id in self.client_tests:
+                print('slave({}).stop_test client({})'.format(self.id, client_id))
+                self.client_tests[client_id].stop()
+                del self.client_tests[client_id]
 
-class TestRunner:
-    def __init__(self, context):
-        pass
 
-    @staticmethod
-    def safe_eval(code, context=None):
-        glob = {'__builtins__': None}
-        if context:
-            glob.update(context)
-        return eval(code, glob)
+class Test:
+    running = False
+
+    def __init__(self, sink, data):
+        self.sink = sink
+
+        test = data['test']
+        self.runs = data['runs']
+        self.name = test['name']
+        self.base = test['base']
+        self.actions = test['actions']
+        self.client_id = data['client_id']
+
+    def run(self):
+        self.stop()
+        self.running = True
+        gevent.spawn(self.run_async)
+
+    def stop(self):
+        if self.running:
+            print('Killing eventlet')
+            self.running = False
+
+    def run_async(self):
+        print('TEST::run_async client({})'.format(self.client_id))
+
+        self.sink.test_started({'client_id': self.client_id})
+        for test_num in xrange(0, self.runs):
+            if not self.running:
+                print('TEST::run_async Detected kill')
+                break
+            self.sink.test_result(self.single_run())
+        self.sink.test_finished({'client_id': self.client_id})
+
+        print('TEST::run_async finished client({})'.format(self.client_id))
+
+    def single_run(self):
+        result = {
+            'client_id': self.client_id,
+            'actions': []
+        }
+        context = {'__builtins__': None}
+        session = Session()
+        for action in self.actions:
+            if 'name' not in action or 'url' not in action:
+                print('Error, incomplete action')
+                return self.error('Got incomplete action')
+
+            if self.parse_probability(action):
+                if self.eval_condition(context, action):
+                    run = self.test_action(context, session, action)
+                    if run:
+                        result['actions'].append(run)
+
+        return result
+
+    def error(self, error_str):
+        self.sink.test_result({
+            'client_id': self.client_id,
+            'error': error_str
+        })
+
+    def parse_probability(self, action):
+        if 'prob' in action:
+            prob = action['prob']
+            # Strip the % off
+            try:
+                if prob[-1:] == '%':
+                    prob = float(prob[:-1]) / 100
+                else:
+                    prob = float(prob)
+            except ValueError:
+                self.error('Got non-percent or non-decimal probability in action {}'.format(action['name']))
+                return False
+
+            if prob <= random.random():
+                return True
+        return True
+
+    def eval_condition(self, context, action):
+        if 'condition' in action:
+            try:
+                return eval(action['condition'], context, {})
+            except Exception as e:
+                print('Error evaluating condition: {}'.format(e))
+                self.error('Slave({}) action: {} got error evaluating condition: {}'.format(self.id, action['name'], e))
+        return True
+
+    def test_action(self, context, session, action):
+        run = {
+            'name': action['name']
+        }
+        if 'input' in action:
+            async_request = grequests.post(self.base + action['url'], action['input'],
+                                           session=session)
+        else:
+            async_request = grequests.get(self.base + action['url'],
+                                          session=session)
+        e = gevent.spawn(async_request.send)
+
+        start_time = time()
+        e.join()
+        response = e.value
+        run['time_taken'] = time() - start_time
+
+        if 'store_output' in action:
+            try:
+                context[action['store_output']] = response.json()
+            except ValueError:
+                context[action['store_output']] = response.text
+
+        return run
 
 @action_class
 class Sink(Actionable):
@@ -187,6 +302,9 @@ class Sink(Actionable):
     connection_prefix = 'tcp://'
     listen_loop = None
     socket_lock = BoundedSemaphore(1)
+    result_lock = BoundedSemaphore(1)
+    test_results = {}
+    RUNS_PER_SEND = 10
 
     def __init__(self, id, host, slave):
         self.id = id
@@ -199,13 +317,16 @@ class Sink(Actionable):
         self.slave.send_to_master(data)
 
     def send_to_sink(self, data):
-        # If we're not the host send it
+        gevent.sleep(0)
         data['sink_id'] = self.id
+        print('{}->SINK'.format(data['action']))
         if not self.is_host:
+            # If we're not the host send it
             self.sock.send(bson.dumps(data))
         else:
             # We're the host, so just handle it
-            self.handle_sink_message(data)
+            gevent.spawn(self.handle_sink_message, data)
+        print('{}->SINK end'.format(data['action']))
 
     def setup(self):
         self.is_host = self.id == self.slave.id
@@ -244,26 +365,119 @@ class Sink(Actionable):
         while True:
             try:
                 self.handle_sink_message(bson.loads(self.sock.recv()))
-            except ZMQError:
-                print('Sink stopped listening')
-                continue
+            except ZMQError, e:
+                print('Sink stopped listening, error: {}'.format(e))
+                break
 
     def handle_sink_message(self, data):
         if 'action' in data:
+            print('{}<-SINK'.format(data['action']))
             self.run_action(data)
+            print('{}<-SINK end'.format(data['action']))
         else:
             print('Slave sent message to sink with no action')
 
     @action
-    def test_result(self, data):
-        print('Sink({}) got test result'.format(self.id), data)
+    def test_started(self, data):
+        print('SINK({})::slave({}) test({})_started'.format(self.id, data['slave_id'], data['client_id']))
+        client_id = data['client_id']
+        if client_id not in self.test_results:
+            print('    First run, creating test({})'.format(client_id))
+            self.test_results[client_id] = {
+                'running_slaves': [],
+                'participating_slaves': [],
+                'pending': []
+            }
+            self.master.test_started(data)
+        self.test_results[client_id]['running_slaves'].append(data['slave_id'])
 
+    @action
+    def test_result(self, data):
+        print('SINK({})::slave({}) test({})_result').format(self.id, data['slave_id'], data['client_id'])
+        client_id = data['client_id']
+        slave_id = data['slave_id']
+        if client_id in self.test_results:
+            self.test_results[client_id]['last_result'] = int(time())
+            pending = self.test_results[client_id]['pending']
+            pending.append(data['actions'])
+            if slave_id not in self.test_results[client_id]['participating_slaves']:
+                self.test_results[client_id]['participating_slaves'].append(slave_id)
+
+            if len(pending) >= self.RUNS_PER_SEND:
+                self.send_pending(client_id)
+                print('SINK({})::Sent results, running: {}'.format(self.id, self.test_results[client_id]['running_slaves']))
+
+        else:
+            print('Failed test not found'.format(client_id))
+
+    def send_pending(self, client_id):
+        if client_id in self.test_results:
+            compiled_results = self.summarize_pending(client_id)
+            if compiled_results:
+                self.master.test_result(compiled_results)
+            self.test_results[client_id]['pending'] = []
+            self.test_results[client_id]['participating_slaves'] = []
+        else:
+            print('Error sending pending, test not found.')
+
+    def summarize_pending(self, client_id):
+        results = self.test_results[client_id]
+        pending = results['pending']
+        if len(pending) == 0:
+            return False
+
+        summary = {
+            'client_id': client_id,
+            'slaves': results['participating_slaves'],
+            'total_runs': 0,
+            'actions': []
+        }
+        for run in pending:
+            summary['total_runs'] += 1
+            for i, action in enumerate(run):
+                action_name = action['name']
+                try:
+                    action_summary = summary['actions'][i]
+                except IndexError:
+                    summary['actions'].append({
+                        'name': action_name,
+                        'runs': 0,
+                        'avg_time': 0
+                    })
+                    action_summary = summary['actions'][i]
+
+                runs = float(action_summary['runs'])
+                if runs == 0:
+                    action_summary['avg_time'] = action['time_taken']
+                else:
+                    action_summary['avg_time'] = (runs/(runs+1))*action_summary['avg_time'] + action['time_taken']/(runs+1)
+                # print('Run: {}, took: {}, avg: {}'.format(runs, action['time_taken'], action_summary['avg_time']))
+                action_summary['runs'] += 1
+
+        return summary
+
+    @action
+    def test_finished(self, data):
+        print('SINK({})::slave({}) test({})_finished'.format(self.id, data['slave_id'], data['client_id']))
+        client_id = data['client_id']
+        slave_id = data['slave_id']
+        if client_id in self.test_results:
+            running_slaves = self.test_results[client_id]['running_slaves']
+            if slave_id in running_slaves:
+                running_slaves.remove(slave_id)
+            if len(running_slaves) == 0:
+                self.send_pending(client_id)
+                del self.test_results[client_id]
+                self.master.test_finished({'client_id': client_id})
+                print('Deleted test')
+        else:
+            print('Failed, test results not found')
 
 
 if __name__ == "__main__":
+    context = zmq.Context()
+    slave = Slave(context)
     try:
-        context = zmq.Context()
-        slave = Slave(context)
         gevent.spawn(slave.heartbeat_forever)
         slave.listen_to_master()
     except KeyboardInterrupt:

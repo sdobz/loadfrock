@@ -47,7 +47,7 @@ app.directive 'autoGrow', ->
 
 WEBSOCKET_PORT = 5577
 
-app.service 'MasterService', ($rootScope, $timeout) ->
+app.service 'MasterService', ($rootScope) ->
   ws = null
   connect = ->
     ws = new WebSocket('ws://localhost:' + WEBSOCKET_PORT)
@@ -95,8 +95,9 @@ app.service 'MasterService', ($rootScope, $timeout) ->
 
 app.controller 'FrockBodyCtrl', ($scope, MasterService) ->
   $scope.connection = MasterService
-  $scope.show_test = true
-  $scope.show_results = false
+  $scope.nav =
+    test: true
+    results: false
 
 app.service 'SlaveService', (MasterService) ->
   SlaveService =
@@ -253,21 +254,51 @@ app.service 'TestRunner', (MasterService, Test) ->
       MasterService.run_action 'stop_test',
         test: Test
 
-  MasterService.register_action 'test_running', (data) ->
-    TestRunner.running = true
-  MasterService.register_action 'test_stopped', (data) ->
-    TestRunner.running = false
-
   return TestRunner
 
-app.service 'ResultsService', (MasterService) ->
+app.service 'ResultsService', (MasterService, TestRunner) ->
   ResultService =
-    runs: 0
-    start: 0
-    duration: 0
-    actions: []
+    clear: ->
+      angular.extend ResultService,
+        runs: 0
+        start: 0
+        stop: null
+        actions: []
+  ResultService.clear()
+
+  MasterService.register_action 'test_running', (data) ->
+    ResultService.clear()
+    ResultService.start = new Date();
+    TestRunner.running = true
+  MasterService.register_action 'test_stopped', (data) ->
+    ResultService.stop = new Date();
+    TestRunner.running = false
 
   MasterService.register_action 'test_result', (data) ->
     console.log 'Got result ', data
+    ResultService.runs += data['total_runs']
+    i = 0
+    for action in data['actions']
+      if not ResultService.actions[i]
+        ResultService.actions.push
+          runs: 0
+          runs_list: []
+          avg_list: []
+          avg_time: 0
+          name: action.name
+      action_result = ResultService.actions[i]
+      action_result.runs_list.push action.runs
+      action_result.avg_list.push action.avg_time
 
+      if action_result.runs == 0
+        action_result.avg_time = action.avg_time
+      else
+        action_result.avg_time = (action_result.runs/(action_result.runs + action.runs)) * action_result.avg_time + action.avg_time/(action.runs)
+      action_result.runs += action.runs
+
+      i += 1
+    console.log 'Compiled into', ResultService
   return ResultService
+
+app.controller 'ResultsCtrl', ($scope, ResultsService)->
+  $scope.results = ResultsService

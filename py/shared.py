@@ -2,7 +2,7 @@
 # A class is given the decorator @action_class
 # And methods are given @action
 # run_action(data) attempts to call the method specified by data['action'] with data as an argument
-
+import gevent
 
 def action_class(cls):
     for name, method in cls.__dict__.iteritems():
@@ -26,7 +26,12 @@ class Actionable(object):
     def run_action(self, data, *args, **kwargs):
         if 'action' not in data or data['action'] not in self.actions:
             return {'error': 'Unknown action'}
-        return getattr(self, data['action'])(data, *args, **kwargs)
+        action_func = getattr(self, data['action'])
+        greenlet = gevent.spawn(action_func, data, *args, **kwargs)
+        greenlet.start()
+        gevent.sleep(0)
+        greenlet.join()
+        return greenlet.value
 
 
 class Sender:
@@ -39,5 +44,5 @@ class Sender:
                 if not data:
                     data = {}
                 data['action'] = action
-                return self.send_method(data)
+                gevent.spawn(self.send_method, data).start()
             return go_for_it

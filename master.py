@@ -117,6 +117,23 @@ class MasterApplication(Actionable):
         else:
             return self.sink_registry[hostname]
 
+    def set_sink(self, slave_id, sink_id, client=None):
+        if sink_id not in self.slave_registry:
+            if client:
+                client.send.error({'error': 'Sink({}) not found'.format(sink_id)})
+
+        sink_host = self.slave_registry[sink_id].get_sink_host()
+        if not sink_host:
+            if client:
+                client.send.error({'error': 'Sink({}) does not have a host yet'.format(sink_id)})
+
+        data = {
+            'sink_host': sink_host,
+            'sink_id': sink_id
+        }
+
+        self.slaves.set_sink(data)
+
     def remove_slave(self, id):
         if id in self.slave_registry:
             print('Killing slave {}'.format(id))
@@ -164,14 +181,12 @@ class Slave(Actionable):
         sink_id = data['sink_id']
 
         if sink_id in self.master.slave_registry:
-            print('Slave ({}) has connected to sink ({})'.format(self.id, data['sink_id']))
-
             self.sink = self.master.slave_registry[sink_id]
-            self.master.sink_registry[self.last_beat['hostname']] = self.sink
             self.master.clients.slave_set_sink({
                 'slave_id': self.id,
                 'sink_id': sink_id
             })
+            print('Slave ({}) has connected to sink ({})'.format(self.id, data['sink_id']))
 
     @action
     def heartbeat(self, data):
@@ -183,15 +198,29 @@ class Slave(Actionable):
         self.master.remove_slave(self.id)
 
     @action
+    def test_started(self, data):
+        if 'client_id' in data:
+            client_id = data['client_id']
+            if client_id in self.master.client_registry:
+                self.master.client_registry[client_id].send.test_running()
+
+    @action
     def test_result(self, data):
         if 'client_id' in data:
             client_id = data['client_id']
             if client_id in self.master.client_registry:
-                self.master.client_registry[client_id].test_result(data)
+                self.master.client_registry[client_id].send.test_result(data)
             else:
                 print('Test result for client({}) cannot be sent, client not found'.format(client_id))
         else:
             return {'error': 'Please set client_id'}
+
+    @action
+    def test_finished(self, data):
+        if 'client_id' in data:
+            client_id = data['client_id']
+            if client_id in self.master.client_registry:
+                self.master.client_registry[client_id].send.test_stopped()
 
 
 @action_class
@@ -233,18 +262,7 @@ class Client(Actionable):
         if 'sink_id' not in data or 'slave_id' not in data:
             raise Exception('Missing sink_id or slave_id')
 
-        sink_id = data['sink_id']
-        if sink_id not in self.master.slave_registry:
-            self.send.error({'error': 'Sink({}) not found'.format(sink_id)})
-
-        sink_host = self.master.slave_registry[sink_id].get_sink_host()
-        if not sink_host:
-            self.send.error({'error': 'Sink({}) does not have a host yet'.format(sink_id)})
-
-        data['sink_host'] = sink_host
-        del data['slave_id']
-
-        self.master.slaves.set_sink(data)
+        self.master.set_sink(data['slave_id'], data['sink_id'], self)
 
     @action
     def request_available_tests(self, data):
@@ -294,13 +312,11 @@ class Client(Actionable):
             else:
                 data['runs'] = 1
             self.master.slaves.run_test(data)
-            self.send.test_running()
 
     @action
     def stop_test(self, data):
         data['client_id'] = self.id
         self.master.slaves.stop_test(data)
-        self.send.test_stopped()
 
 if __name__ == "__main__":
     print('WLOCOM TO TEH LODE OF ETST')
@@ -308,5 +324,6 @@ if __name__ == "__main__":
     master_app = MasterApplication(context)
     gevent.spawn(master_app.watch_slaves)
     WebSocketServer(('', WEBSOCKET_PORT), master_app).start()
-    gevent.wsgi.WSGIServer(
-        ('', HTTP_PORT), paste.urlparser.StaticURLParser(os.path.dirname(__file__))).serve_forever()
+    # Interface
+    dev_null = open('/dev/null', 'w')
+    gevent.wsgi.WSGIServer(('', HTTP_PORT), paste.urlparser.StaticURLParser(os.path.dirname(__file__)), log=dev_null).serve_forever()

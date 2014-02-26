@@ -54,7 +54,7 @@
 
   WEBSOCKET_PORT = 5577;
 
-  app.service('MasterService', function($rootScope, $timeout) {
+  app.service('MasterService', function($rootScope) {
     var MasterService, connect, ws;
     ws = null;
     connect = function() {
@@ -122,8 +122,10 @@
 
   app.controller('FrockBodyCtrl', function($scope, MasterService) {
     $scope.connection = MasterService;
-    $scope.show_test = true;
-    return $scope.show_results = false;
+    return $scope.nav = {
+      test: true,
+      results: false
+    };
   });
 
   app.service('SlaveService', function(MasterService) {
@@ -332,27 +334,66 @@
         });
       }
     };
-    MasterService.register_action('test_running', function(data) {
-      return TestRunner.running = true;
-    });
-    MasterService.register_action('test_stopped', function(data) {
-      return TestRunner.running = false;
-    });
     return TestRunner;
   });
 
-  app.service('ResultsService', function(MasterService) {
+  app.service('ResultsService', function(MasterService, TestRunner) {
     var ResultService;
     ResultService = {
-      runs: 0,
-      start: 0,
-      duration: 0,
-      actions: []
+      clear: function() {
+        return angular.extend(ResultService, {
+          runs: 0,
+          start: 0,
+          stop: null,
+          actions: []
+        });
+      }
     };
+    ResultService.clear();
+    MasterService.register_action('test_running', function(data) {
+      ResultService.clear();
+      ResultService.start = new Date();
+      return TestRunner.running = true;
+    });
+    MasterService.register_action('test_stopped', function(data) {
+      ResultService.stop = new Date();
+      return TestRunner.running = false;
+    });
     MasterService.register_action('test_result', function(data) {
-      return console.log('Got result ', data);
+      var action, action_result, i, _i, _len, _ref;
+      console.log('Got result ', data);
+      ResultService.runs += data['total_runs'];
+      i = 0;
+      _ref = data['actions'];
+      for (_i = 0, _len = _ref.length; _i < _len; _i++) {
+        action = _ref[_i];
+        if (!ResultService.actions[i]) {
+          ResultService.actions.push({
+            runs: 0,
+            runs_list: [],
+            avg_list: [],
+            avg_time: 0,
+            name: action.name
+          });
+        }
+        action_result = ResultService.actions[i];
+        action_result.runs_list.push(action.runs);
+        action_result.avg_list.push(action.avg_time);
+        if (action_result.runs === 0) {
+          action_result.avg_time = action.avg_time;
+        } else {
+          action_result.avg_time = (action_result.runs / (action_result.runs + action.runs)) * action_result.avg_time + action.avg_time / action.runs;
+        }
+        action_result.runs += action.runs;
+        i += 1;
+      }
+      return console.log('Compiled into', ResultService);
     });
     return ResultService;
+  });
+
+  app.controller('ResultsCtrl', function($scope, ResultsService) {
+    return $scope.results = ResultsService;
   });
 
 }).call(this);
