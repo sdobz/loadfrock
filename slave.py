@@ -197,8 +197,8 @@ class Slave(Actionable):
         client_id = data['client_id']
         if client_id in self.client_tests:
             log.info('slave({}).stop_test client({})'.format(self.id, client_id))
-            del self.client_tests[client_id]
             self.client_tests[client_id].stop()
+            del self.client_tests[client_id]
         else:
             self.master.test_stopped()
 

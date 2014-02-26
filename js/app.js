@@ -380,9 +380,10 @@
         action_result.runs_list.push(action.runs);
         action_result.avg_list.push(action.avg_time);
         if (action_result.runs === 0) {
+          console.log('Setting avg_time to', action.avg_time);
           action_result.avg_time = action.avg_time;
         } else {
-          action_result.avg_time = (action_result.runs / (action_result.runs + action.runs)) * action_result.avg_time + action.avg_time / action.runs;
+          action_result.avg_time = (action_result.runs / (action_result.runs + action.runs)) * action_result.avg_time + (action.runs / (action_result.runs + action.runs)) * action.avg_time;
         }
         action_result.runs += action.runs;
         i += 1;
