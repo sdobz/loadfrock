@@ -1,6 +1,6 @@
 # A very simple HTTP server designed to for testing situations where the data returned
 # is not important but the rate at which it comes down is. This server can be started
-# using the command: python delayserver.py
+# using the command: python slow_server.py
 #
 # Once started, it will listen for requests on port 8000
 # Requests should be of the form http://<address>:8000/size=<bytes>,duration=<seconds>
@@ -13,59 +13,58 @@
 # * Press ctrl-c to stop serving
 
 
-import time
-import BaseHTTPServer
+from gevent import wsgi
+import gevent
 import math
+from time import time
 
 MIN_SLEEP = .05
 
-class MyHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
-    def do_GET(self):
-        request = self.path.strip("/")
-        duration = 1
-        size = 1024
 
-        valid_request = False
-        params = request.split(",")
-        for p in params:
-            temp = p.partition("=")
-            if temp[0] == "size":
-                size = int(temp[2])
-                valid_request = True
-            elif temp[0] == "duration":
-                duration = float(temp[2])
-                valid_request = True
+def slow_response(env, start_response):
+    print(env['PATH_INFO'])
+    request = env['PATH_INFO'].strip('/')
+    duration = 1
+    size = 1024
 
-            if not valid_request:
-                self.send_error(404)
-                return
+    valid_request = False
+    params = request.split(",")
+    for p in params:
+        temp = p.partition("=")
+        if temp[0] == "size":
+            size = int(temp[2])
+            valid_request = True
+        elif temp[0] == "duration":
+            duration = float(temp[2])
+            valid_request = True
 
-        self.send_response(200)
-        self.send_header("Content-Length", str(size))
-        self.send_header("Pragma", "no-cache")
-        self.end_headers()
-        self.slow_write(self.wfile, size, duration)
+        if not valid_request:
+            start_response('404 Not Found', [('Content-Type', 'text/html')])
+            return ["Not Understood"]
+    start_response('200 OK', [('Content-Type', 'text/html'),
+                              ('Pragma', 'no-cache'),
+                              ('Content-Length', str(size))])
+    return slow_write(size, duration)
 
-    def slow_write(self, output, size, duration):
-        bytes_written = 0
-        start_time = time.time()
-        duration_per_byte = duration/size
 
-        chunk_size = int(math.ceil(MIN_SLEEP / duration_per_byte))
-        sleep_duration = duration_per_byte * chunk_size
+def slow_write(size, duration):
+    bytes_written = 0
+    start_time = time()
+    duration_per_byte = duration/size
 
-        while bytes_written < size:
-            num_bytes = min(size - bytes_written, chunk_size)
+    chunk_size = int(math.ceil(MIN_SLEEP / duration_per_byte))
+    sleep_duration = duration_per_byte * chunk_size
 
-            output.write('.' * num_bytes)
-            bytes_written += num_bytes
+    while bytes_written < size:
+        num_bytes = min(size - bytes_written, chunk_size)
 
-            time.sleep(sleep_duration)
-            output.flush()
-        now = time.time()
-        self.log_message("Request took %f seconds",   now - start_time)
+        yield '.' * num_bytes
+        bytes_written += num_bytes
 
-if __name__ == "__main__":
-    http = BaseHTTPServer.HTTPServer(('', 8000), MyHTTPRequestHandler)
-    print "Listening on 8000 - press ctrl-c to stop"
-    http.serve_forever()
+        gevent.sleep(sleep_duration)
+    now = time()
+    print("Request took {} seconds".format(now - start_time))
+
+if __name__ == '__main__':
+    print "Listening on 0.0.0.0:8000"
+    wsgi.WSGIServer(('', 8000), slow_response).serve_forever()
