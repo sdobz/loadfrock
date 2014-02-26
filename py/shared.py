@@ -3,6 +3,7 @@
 # And methods are given @action
 # run_action(data) attempts to call the method specified by data['action'] with data as an argument
 import gevent
+import logging
 
 def action_class(cls):
     for name, method in cls.__dict__.iteritems():
@@ -46,3 +47,5 @@ class Sender:
                 data['action'] = action
                 gevent.spawn(self.send_method, data).start()
             return go_for_it
+
+

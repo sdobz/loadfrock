@@ -10,6 +10,9 @@ import gevent.wsgi
 import zmq.green as zmq
 from time import time
 from geventwebsocket import WebSocketServer, WebSocketError
+import logging
+log = logging.getLogger('master')
+logging.basicConfig(level=logging.INFO)
 
 
 # http://css.dzone.com/articles/gevent-zeromq-websockets-and
@@ -23,10 +26,10 @@ class MasterApplication(Actionable):
     removed_slaves = set()
 
     def __init__(self, context):
-        print('Master initialized')
+        log.info('Master initialized')
         self.context = context
-        self.slave_in = context.socket(zmq.REP)
-        self.slave_in.bind("tcp://*:{}".format(SLAVE_REP_PORT))
+        self.slave_in = context.socket(zmq.PULL)
+        self.slave_in.bind("tcp://*:{}".format(SLAVE_MASTER_PORT))
         gevent.spawn(self.listen_to_slaves)
 
         self.slave_out = context.socket(zmq.PUB)
@@ -48,7 +51,7 @@ class MasterApplication(Actionable):
 
     def listen_to_websocket(self, ws):
         client = self.add_client(ws)
-        print('Websocket {} connected!'.format(client.id))
+        log.info('Websocket {} connected!'.format(client.id))
 
         while True:
             try:
@@ -74,36 +77,52 @@ class MasterApplication(Actionable):
             del self.client_registry[client.id]
 
     def listen_to_slaves(self):
-        print('Listening to slaves')
+        log.info('Listening to slaves')
         while True:
-            msg = self.slave_in.recv()
-            resp = self.handle_slave_message(msg)
-            self.slave_in.send(resp)
+            self.handle_slave_message(self.slave_in.recv())
 
     def handle_slave_message(self, msg):
         data = bson.loads(msg)
         if 'action' in data:
-            slave, assign_id = self.load_slave(data)
-            if assign_id:
-                data['slave_id'] = assign_id
-            resp = slave.run_action(data) or {}
-            if assign_id:
-                resp['assign_id'] = assign_id
-        else:
-            resp = {'error': 'No action specified'}
-        return bson.dumps(resp)
+            if 'slave_id' not in data or data['slave_id'] not in self.slave_registry:
+                if data['action'] == 'heartbeat':
+                    slave = self.new_slave(data)
+                else:
+                    log.error('Got non-heartbeat message from unknown slave')
+                    return
+            else:
+                slave = self.load_slave(data)
+            slave.run_action(data)
 
     def load_slave(self, data):
-        if 'slave_id' not in data or data['slave_id'] not in self.slave_registry:
-            slave = self.new_slave()
-            return slave, slave.id
+        if 'slave_id' not in data:
+            log.warn('load_slave without slave_id')
+            return
+        slave_id = data['slave_id']
+        if slave_id not in self.slave_registry:
+            log.warn("load_slave couldn't find slave")
+            return
+        return self.slave_registry[slave_id]
 
-        return self.slave_registry[data['slave_id']], None
-
-    def new_slave(self):
+    def new_slave(self, heartbeat_data):
         slave = Slave(self, self.get_next_slave_id())
+        # Modify the data, providing a slave_id to run_action if it needs it
+        heartbeat_data['slave_id'] = slave.id
+
+        # Kinda a hack, we want to get the sink_host before the action is run,
+        # and that requires heartbeat data, so we store it if we have it
+        slave.last_beat = heartbeat_data
+
+        self.slaves.set_id({
+            'new_slave_id': slave.id,
+            'slave_uuid': heartbeat_data['slave_uuid']
+        })
+        sink = self.pick_sink(slave)
+        self.slaves.set_sink({
+            'sink_id': sink.id,
+            'sink_host': sink.get_sink_host()
+        })
         self.slave_registry[slave.id] = slave
-        self.clients.slave_heartbeat({'slave_id': slave.id})
         return slave
 
     def get_next_slave_id(self):
@@ -111,21 +130,26 @@ class MasterApplication(Actionable):
         return self.next_slave_id
 
     def pick_sink(self, slave):
-        hostname = slave.last_beat.get('hostname')
-        if hostname and hostname not in self.sink_registry:
-            return slave
-        else:
-            return self.sink_registry[hostname]
+        hostname = slave.get_hostname()
+        if hostname:
+            if hostname not in self.sink_registry:
+                return slave
+            else:
+                return self.sink_registry[hostname]
 
     def set_sink(self, slave_id, sink_id, client=None):
         if sink_id not in self.slave_registry:
+            log.warn('set_sink to unknown sink')
             if client:
                 client.send.error({'error': 'Sink({}) not found'.format(sink_id)})
+            return
 
         sink_host = self.slave_registry[sink_id].get_sink_host()
         if not sink_host:
+            log.warn('Could sink_host not found')
             if client:
                 client.send.error({'error': 'Sink({}) does not have a host yet'.format(sink_id)})
+            return
 
         data = {
             'sink_host': sink_host,
@@ -134,9 +158,12 @@ class MasterApplication(Actionable):
 
         self.slaves.set_sink(data)
 
+    def register_sink(self, sink):
+        self.sink_registry[sink.get_hostname()] = sink
+
     def remove_slave(self, id):
         if id in self.slave_registry:
-            print('Killing slave {}'.format(id))
+            log.info('Killing slave {}'.format(id))
             del self.slave_registry[id]
         self.slaves.quit({'slave_id': id})
         self.clients.slave_disconnected({'slave_id': id})
@@ -169,10 +196,18 @@ class Slave(Actionable):
         data['client_id'] = self.id
         self.master.broadcast_to_slaves(data)
 
+    def get_hostname(self):
+        if 'hostname' in self.last_beat:
+            return self.last_beat['hostname']
+        else:
+            log.error('Attempt to get hostname before heartbeat')
+
     def get_sink_host(self):
-        hostname = self.last_beat.get('hostname')
+        hostname = self.get_hostname()
         if hostname:
             return '{}:{}'.format(hostname, SLAVE_SINK_PORT)
+        else:
+            log.error('Attempt to get_sink_host before hostname heartbeat')
 
     @action
     def connected_to_sink(self, data):
@@ -182,11 +217,14 @@ class Slave(Actionable):
 
         if sink_id in self.master.slave_registry:
             self.sink = self.master.slave_registry[sink_id]
+            self.master.register_sink(self.sink)
             self.master.clients.slave_set_sink({
                 'slave_id': self.id,
                 'sink_id': sink_id
             })
-            print('Slave ({}) has connected to sink ({})'.format(self.id, data['sink_id']))
+            log.info('Slave ({}) has connected to sink ({})'.format(self.id, data['sink_id']))
+        else:
+            log.warn('Sink {} not found in registry'.format(data['sink_id']))
 
     @action
     def heartbeat(self, data):
@@ -203,6 +241,8 @@ class Slave(Actionable):
             client_id = data['client_id']
             if client_id in self.master.client_registry:
                 self.master.client_registry[client_id].send.test_running()
+        else:
+            log.warn('Client id not in test_started')
 
     @action
     def test_result(self, data):
@@ -211,8 +251,9 @@ class Slave(Actionable):
             if client_id in self.master.client_registry:
                 self.master.client_registry[client_id].send.test_result(data)
             else:
-                print('Test result for client({}) cannot be sent, client not found'.format(client_id))
+                log.warn('Test result for client({}) cannot be sent, client not found'.format(client_id))
         else:
+            log.warn('Client id not in test_result')
             return {'error': 'Please set client_id'}
 
     @action
@@ -316,7 +357,10 @@ class Client(Actionable):
     @action
     def stop_test(self, data):
         data['client_id'] = self.id
-        self.master.slaves.stop_test(data)
+        if len(self.master.slave_registry) != 0:
+            self.master.slaves.stop_test(data)
+        else:
+            self.send.test_stopped()
 
 if __name__ == "__main__":
     print('WLOCOM TO TEH LODE OF ETST')

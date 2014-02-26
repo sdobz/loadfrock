@@ -12,6 +12,11 @@ import socket
 import random
 import grequests
 from requests import Session
+from uuid import uuid4
+import logging
+log = logging.getLogger('slave')
+logging.basicConfig(level=logging.INFO)
+
 
 @action_class
 class Slave(Actionable):
@@ -31,8 +36,8 @@ class Slave(Actionable):
 
     def __init__(self, context):
         self.context = context
-        self.socket_out = context.socket(zmq.REQ)
-        self.socket_out.connect("tcp://localhost:{}".format(SLAVE_REP_PORT))
+        self.socket_out = context.socket(zmq.PUSH)
+        self.socket_out.connect("tcp://localhost:{}".format(SLAVE_MASTER_PORT))
         self.master = Sender(self.send_to_master)
 
         self.socket_in = context.socket(zmq.SUB)
@@ -40,33 +45,38 @@ class Slave(Actionable):
         self.socket_in.connect("tcp://localhost:{}".format(SLAVE_PUB_PORT))
 
         self.sink_host = '{}:{}'.format(self.hostname(), SLAVE_SINK_PORT)
+        self.uuid = uuid4().hex
 
     def send_to_master(self, data):
         if self.id:
             data['slave_id'] = self.id
-        self.message_lock.acquire()
         if data['action'] != 'heartbeat':
-            print('MASTER->{}'.format(data['action']))
+            log.debug('MASTER->{}'.format(data['action']))
         self.socket_out.send(bson.dumps(data))
-        resp = bson.loads(self.socket_out.recv())
         if data['action'] != 'heartbeat':
-            print('MASTER->{} end'.format(data['action']))
-        self.message_lock.release()
-        self.check_for_id(resp)
-        return resp
+            log.debug('MASTER->{} end'.format(data['action']))
 
     def send_to_sink(self, data):
         if self.id:
             data['slave_id'] = self.id
-        self.sink_obj.send_to_sink(data)
+        if self.sink_obj:
+            self.sink_obj.send_to_sink(data)
+        else:
+            log.warn('{}->SINK failed, no sink'.format(data['action']))
 
-    def check_for_id(self, resp):
-        if 'assign_id' in resp:
-            self.id = resp['assign_id']
-            print('Assigned id: {}'.format(self.id))
+    def check_for_props(self, resp):
+        if 'assign_slave_id' in resp:
+            self.id = resp['assign_slave_id']
+            log.info('Assigned id: {}'.format(self.id))
+        if 'assign_sink_id' in resp:
+            if 'assign_sink_host' not in resp:
+                log.warn('assign_sink_id without host')
+            else:
+                self.connect_to_sink(resp['assign_sink_id'],
+                                     resp['assign_sink_host'])
 
     def listen_to_master(self):
-        print("Listening to master")
+        log.info("Listening to master")
         while True:
             self.handle_master_message(self.socket_in.recv())
 
@@ -74,11 +84,11 @@ class Slave(Actionable):
         data = bson.loads(msg)
         if 'action' in data:
             if 'slave_id' not in data or data['slave_id'] == self.id:
-                print('{}<-MASTER'.format(data['action']))
+                log.debug('{}<-MASTER'.format(data['action']))
                 self.run_action(data)
-                print('{}<-MASTER end'.format(data['action']))
+                log.debug('{}<-MASTER end'.format(data['action']))
         else:
-            print('Server sent message with no action')
+            log.warn('Server sent message with no action')
 
     def heartbeat(self):
         physical_memory = psutil.phymem_usage()
@@ -113,34 +123,47 @@ class Slave(Actionable):
                 'out': (self.bw_out, self.total_bw_out)
             },
             'generated': int(time()),
-            'sink_id': self.sink_obj.id if self.sink_obj else None
+            'sink_id': self.sink_obj.id if self.sink_obj else None,
+            'slave_uuid': self.uuid
         })
 
     def heartbeat_forever(self):
-        print('Beating heart forever')
+        log.info('Beating heart forever')
         while True:
             self.heartbeat()
             gevent.sleep(HEARTBEAT_PERIOD)
 
     @action
+    def set_id(self, data):
+        if 'slave_uuid' not in data or 'new_slave_id' not in data:
+            log.warn('receiving id without slave_uuid/new_slave_id')
+            return
+        if data['slave_uuid'] == self.uuid:
+            self.id = data['new_slave_id']
+            log.info('Received id: {}'.format(self.id))
+
+    @action
     def set_sink(self, data):
         if 'sink_id' in data and 'sink_host' in data and data['sink_host'] == self.sink_host:
             self.connect_to_sink(data['sink_id'], data['sink_host'])
+        else:
+            log.warn('Incomplete sink call')
 
     @staticmethod
     def hostname():
         return socket.gethostname()
 
     def connect_to_sink(self, sink_id, host):
-        print('Attempting to connect to sink({}) - {}'.format(sink_id, host))
+        log.info('Attempting to connect to sink({}) - {}'.format(sink_id, host))
         if self.sink_obj:
+            log.info('Closing previous sink')
             self.sink_obj.close()
         self.sink_obj = Sink(id=sink_id,
                              host=host,
                              slave=self)
 
         if self.sink_obj.setup():
-            print('Ok!')
+            log.info('Ok!')
             self.sink = Sender(self.send_to_sink)
             self.master.connected_to_sink({
                 'sink_id': self.sink_obj.id
@@ -148,38 +171,36 @@ class Slave(Actionable):
 
     @action
     def quit(self, data):
-        print('Master told us to quit, quitting.')
+        log.info('Master told us to quit, quitting.')
         sys.exit(0)
 
     @action
     def run_test(self, data):
-        print('slave({}).run_test client({})'.format(self.id, data['client_id']))
+        log.info('slave({}).run_test client({})'.format(self.id, data['client_id']))
         if not self.sink_obj:
-            print('Error, no sink')
-            return self.master.error({
-                'client_id': data['client_id'],
-                'error': 'Slave({}) has no sink'.format(self.id)
-            })
+            log.warn('Error, no sink')
+            return
         if 'test' in data:
             client_id = data['client_id']
             test = Test(self.sink, data)
             if client_id in self.client_tests:
-                print('    Pre-empt stop test')
+                log.info('Stopping previous test')
                 self.client_tests[client_id].stop()
 
             self.client_tests[data['client_id']] = test
             test.run()
         else:
-            raise Exception('No test given')
+            log.warn('No test given')
 
     @action
     def stop_test(self, data):
         client_id = data['client_id']
-        if self.sink_obj:
-            if client_id in self.client_tests:
-                print('slave({}).stop_test client({})'.format(self.id, client_id))
-                self.client_tests[client_id].stop()
-                del self.client_tests[client_id]
+        if client_id in self.client_tests:
+            log.info('slave({}).stop_test client({})'.format(self.id, client_id))
+            del self.client_tests[client_id]
+            self.client_tests[client_id].stop()
+        else:
+            self.master.test_stopped()
 
 
 class Test:
@@ -202,21 +223,20 @@ class Test:
 
     def stop(self):
         if self.running:
-            print('Killing eventlet')
             self.running = False
 
     def run_async(self):
-        print('TEST::run_async client({})'.format(self.client_id))
+        log.info('TEST::run_async client({})'.format(self.client_id))
 
         self.sink.test_started({'client_id': self.client_id})
         for test_num in xrange(0, self.runs):
             if not self.running:
-                print('TEST::run_async Detected kill')
+                log.info('TEST::run_async Detected kill')
                 break
             self.sink.test_result(self.single_run())
         self.sink.test_finished({'client_id': self.client_id})
 
-        print('TEST::run_async finished client({})'.format(self.client_id))
+        log.info('TEST::run_async finished client({})'.format(self.client_id))
 
     def single_run(self):
         result = {
@@ -227,7 +247,7 @@ class Test:
         session = Session()
         for action in self.actions:
             if 'name' not in action or 'url' not in action:
-                print('Error, incomplete action')
+                log.info('Error, incomplete action')
                 return self.error('Got incomplete action')
 
             if self.parse_probability(action):
@@ -263,12 +283,15 @@ class Test:
 
     def eval_condition(self, context, action):
         if 'condition' in action:
-            try:
-                return eval(action['condition'], context, {})
-            except Exception as e:
-                print('Error evaluating condition: {}'.format(e))
-                self.error('Slave({}) action: {} got error evaluating condition: {}'.format(self.id, action['name'], e))
+            return self.eval(action['condition'], context)
         return True
+
+    def eval(self, context):
+        try:
+            return eval(action['condition'], context, {})
+        except Exception as e:
+            log.info('Error evaluating condition: {}'.format(e))
+            self.error('Slave({}) action: {} got error evaluating condition: {}'.format(self.id, action['name'], e))
 
     def test_action(self, context, session, action):
         run = {
@@ -319,14 +342,14 @@ class Sink(Actionable):
     def send_to_sink(self, data):
         gevent.sleep(0)
         data['sink_id'] = self.id
-        print('{}->SINK'.format(data['action']))
+        log.debug('{}->SINK'.format(data['action']))
         if not self.is_host:
             # If we're not the host send it
             self.sock.send(bson.dumps(data))
         else:
             # We're the host, so just handle it
             gevent.spawn(self.handle_sink_message, data)
-        print('{}->SINK end'.format(data['action']))
+        log.debug('{}->SINK end'.format(data['action']))
 
     def setup(self):
         self.is_host = self.id == self.slave.id
@@ -342,13 +365,14 @@ class Sink(Actionable):
                 return True
             except ZMQError:
                 if attempt == 1:
-                    print('Sink({}) failed to {} to {}'.format(
+                    log.info('Sink({}) failed to {} to {}'.format(
                         self.id,
                         'bind' if self.is_host else 'connect',
                         self.host))
-                print('Attempt {} of 3 failed...'.format(attempt))
+
+                log.info('Attempt {} of 3 failed...'.format(attempt))
                 gevent.sleep(1)
-        print('Failed to connect')
+        log.warn('Failed to connect')
         return False
 
     def create_socket(self, type):
@@ -361,28 +385,28 @@ class Sink(Actionable):
             self.sock.close()
 
     def listen_to_slaves(self):
-        print('Sink listening')
+        log.info('Sink listening')
         while True:
             try:
                 self.handle_sink_message(bson.loads(self.sock.recv()))
             except ZMQError, e:
-                print('Sink stopped listening, error: {}'.format(e))
+                log.info('Sink stopped listening, error: {}'.format(e))
                 break
 
     def handle_sink_message(self, data):
         if 'action' in data:
-            print('{}<-SINK'.format(data['action']))
+            log.debug('{}<-SINK'.format(data['action']))
             self.run_action(data)
-            print('{}<-SINK end'.format(data['action']))
+            log.debug('{}<-SINK end'.format(data['action']))
         else:
-            print('Slave sent message to sink with no action')
+            log.warn('Slave sent message to sink with no action')
 
     @action
     def test_started(self, data):
-        print('SINK({})::slave({}) test({})_started'.format(self.id, data['slave_id'], data['client_id']))
         client_id = data['client_id']
+        log.info('SINK({})::slave({}) test({})_started'.format(self.id, data['slave_id'], data['client_id']))
         if client_id not in self.test_results:
-            print('    First run, creating test({})'.format(client_id))
+            log.info('First run, creating test({})'.format(client_id))
             self.test_results[client_id] = {
                 'running_slaves': [],
                 'participating_slaves': [],
@@ -393,9 +417,9 @@ class Sink(Actionable):
 
     @action
     def test_result(self, data):
-        print('SINK({})::slave({}) test({})_result').format(self.id, data['slave_id'], data['client_id'])
         client_id = data['client_id']
         slave_id = data['slave_id']
+        log.info('SINK({})::slave({}) test({})_result'.format(self.id, slave_id, client_id))
         if client_id in self.test_results:
             self.test_results[client_id]['last_result'] = int(time())
             pending = self.test_results[client_id]['pending']
@@ -405,10 +429,10 @@ class Sink(Actionable):
 
             if len(pending) >= self.RUNS_PER_SEND:
                 self.send_pending(client_id)
-                print('SINK({})::Sent results, running: {}'.format(self.id, self.test_results[client_id]['running_slaves']))
+                log.info('SINK({})::Sent results, running: {}'.format(self.id, self.test_results[client_id]['running_slaves']))
 
         else:
-            print('Failed test not found'.format(client_id))
+            log.warn('Failed test not found'.format(client_id))
 
     def send_pending(self, client_id):
         if client_id in self.test_results:
@@ -418,7 +442,7 @@ class Sink(Actionable):
             self.test_results[client_id]['pending'] = []
             self.test_results[client_id]['participating_slaves'] = []
         else:
-            print('Error sending pending, test not found.')
+            log.warn('Error sending pending, test not found.')
 
     def summarize_pending(self, client_id):
         results = self.test_results[client_id]
@@ -458,9 +482,9 @@ class Sink(Actionable):
 
     @action
     def test_finished(self, data):
-        print('SINK({})::slave({}) test({})_finished'.format(self.id, data['slave_id'], data['client_id']))
         client_id = data['client_id']
         slave_id = data['slave_id']
+        log.info('SINK({})::slave({}) test({})_finished'.format(self.id, slave_id, client_id))
         if client_id in self.test_results:
             running_slaves = self.test_results[client_id]['running_slaves']
             if slave_id in running_slaves:
@@ -471,15 +495,16 @@ class Sink(Actionable):
                 self.master.test_finished({'client_id': client_id})
                 print('Deleted test')
         else:
-            print('Failed, test results not found')
+            log.warn('Failed, test results not found')
 
 
 if __name__ == "__main__":
+    print('Slave started')
     context = zmq.Context()
     slave = Slave(context)
     try:
         gevent.spawn(slave.heartbeat_forever)
         slave.listen_to_master()
     except KeyboardInterrupt:
-        print('Telling master we quit')
+        log.info('Telling master we quit')
         slave.master.quit({'id': slave.id})
