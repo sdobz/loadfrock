@@ -10,7 +10,7 @@
             <h1>LoadFrock</h1>
             <h3 ng-hide="connection.connected">
                 Not Connected
-                <span class="glyphicon glyphicon-exclamation-sign center-text">
+                <span class="glyphicon glyphicon-exclamation-sign center-text"></span>
             </h3>
         </section>
         <div class="col-md-4 col-xs-12">
@@ -108,11 +108,11 @@
         </div>
         <div class="col-md-8 col-xs-12" ng-controller="TestCtrl" ng-if="nav.test">
             <div class="row">
-                <div class="btn-group col-xs-6">
-                  <button type="button" class="btn btn-default active">Test</button>
-                  <button type="button" class="btn btn-default"
-                          ng-click="nav.test=false;nav.results=true">Results</button>
-                </div>
+                <ul class="header-buttons col-xs-6 text-center">
+                  <ul class="glyphicon glyphicon-arrow-right">Test</ul>
+                  <ul class="glyphicon glyphicon-button"
+                        ng-click="nav.test=false;nav.results=true">Results</ul>
+                </ul>
                 <ul class="header-buttons col-xs-6 text-center">
                     <li class="glyphicon glyphicon-floppy-open glyphicon-button" ng-click="open_load_modal()">Load</li>
                     <li class="glyphicon glyphicon-floppy-save glyphicon-button" ng-click="test.save()">Save</li>
@@ -154,8 +154,8 @@
                     <li class="glyphicon glyphicon-plus glyphicon-button" ng-click="test.add_action(actions.length)">Bottom</li>
                 </ul>
             </div>
-            <div class="action-group" cu-repeat-reorder="action in test.actions" cu-reorder-handle="span.action-dragger">
-                <div class="action-wrapper row">
+            <div class="action-group">
+                <div class="action-wrapper row" cu-repeat-reorder="action in test.actions" cu-reorder-handle="span.action-dragger">
                     <div class="action-header row"
                          ng-class="{'no-bottom-radius': action.body_visible}">
                         <div class="col-xs-1">
@@ -206,21 +206,67 @@
         </div>
         <div class="col-md-8 col-xs-12" ng-controller="ResultsCtrl" ng-if="nav.results">
             <div class="row">
-                <div class="btn-group col-xs-6">
-                  <button type="button" class="btn btn-default"
-                          ng-click="nav.test=true;nav.results=false">Test</button>
-                  <button type="button" class="btn btn-default active">Results</button>
+                <ul class="header-buttons col-xs-6 text-center">
+                  <li class="glyphicon glyphicon-button"
+                          ng-click="nav.test=true;nav.results=false">Test</li>
+                  <li class="glyphicon glyphicon-arrow-right"
+                        ng-click="nav.test=false;nav.results=true">Results</li>
+                </ul>
+            </div>
+            <div class="results-summary row">
+                <div class="results-header text-center">
+                    <div class="col-xs-1">
+                        Start
+                    </div>
+                    <div class="col-xs-8 text-center">
+                        Runs
+                    </div>
+                    <div class="col-xs-1">
+                        End
+                    </div>
+                    <div class="col-xs-2">
+                        Duration
+                    </div>
+                    <div class="clearfix"></div>
+                </div>
+                <div>
+                    <div class="col-xs-1">
+                        {{ results.start | date: 'H:mm' }}
+                    </div>
+                    <div class="col-xs-8">
+                        <div class="progress">
+                            <div class="progress-bar" role="progressbar" aria-valuenow="{{ results.runs }}" aria-valuemin="0" aria-valuemax="{{ test.runs }}" style="width: {{ results.runs*100/test.runs }}%;">
+                                {{ results.runs }}/{{ test.runs }}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-xs-1" ng-hide="!results.stop">
+                        {{ results.stop | date: 'H:mm' }}
+                    </div>
+                    <div class="col-xs-2" ng-hide="!results.stop">
+                        {{ results.stop - results.start | date: 'm:ss' }}
+                    </div>
+                    <div class="clearfix"></div>
                 </div>
             </div>
-            <div class="row" ng-if="results.start">
-                Start: {{ results.start }}
-                <span ng-if="results.stop">
-                    Stop: {{ results.stop }}
-                    Duration: {{ (results.stop - results.start)/1000 }} sec
-                </span>
-            </div>
-            <div class="row" ng-repeat="action in results.actions">
-                Action: {{ action.name }} Runs: {{ action.runs }} Average time: {{ action.avg_time }}
+            <div class="action-group">
+                <div class="action-wrapper row" ng-repeat="action in results.actions">
+                    <div class="action-header action-header-results row"
+                         ng-click="action.body_visible = !action.body_visible">
+                        <div class="col-xs-6">
+                            <h5>{{ action.name }}</h5>
+                        </div>
+                        <div class="col-xs-3">
+                            Runs: {{ action.runs }}
+                        </div>
+                        <div class="col-xs-3">
+                            Average Time: {{ action.avg_time | number:3 }}
+                        </div>
+                    </div>
+                    <div class="action-body action-body-results row">
+                        <chart ng-model="action.chart_data" ng-options='{"yaxis":{"min":0}}' class="result-plot"></chart>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -275,7 +321,8 @@
     <script type="text/javascript" src="js/angular-hammer.js"></script>
     <script type="text/javascript" src="js/zest.js"></script>
     <script type="text/javascript" src="js/dragger.js"></script>
-    <script type="text/javascript" src="js/Chart.js"></script>
+    <script type="text/javascript" src="js/flot/jquery.js"></script>
+    <script type="text/javascript" src="js/flot/jquery.flot.js"></script>
     <script type="text/javascript" src="js/app.js"></script>
 </body>
 </html>

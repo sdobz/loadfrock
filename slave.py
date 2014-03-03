@@ -13,6 +13,7 @@ import random
 import grequests
 from requests import Session
 from uuid import uuid4
+import re
 import logging
 log = logging.getLogger('slave')
 logging.basicConfig(level=logging.INFO)
@@ -243,7 +244,10 @@ class Test:
             'client_id': self.client_id,
             'actions': []
         }
-        context = {'__builtins__': None}
+        context = {
+            '__builtins__': None,
+            'rand': random.random
+        }
         session = Session()
         for action in self.actions:
             if 'name' not in action or 'url' not in action:
@@ -266,7 +270,7 @@ class Test:
 
     def parse_probability(self, action):
         if 'prob' in action:
-            prob = action['prob']
+            prob = self.eval_expressions(context, action['prob'])
             # Strip the % off
             try:
                 if prob[-1:] == '%':
@@ -278,31 +282,45 @@ class Test:
                 return False
 
             if prob <= random.random():
-                return True
+                return False
         return True
+
+    def eval_expressions(self, context, input):
+        return re.sub(r'\[\[.*?\]\]',
+                      lambda match: str(self.eval(match.group()[2:-2], context)),
+                      input)
 
     def eval_condition(self, context, action):
         if 'condition' in action:
-            return self.eval(action['condition'], context)
+            condition = self.eval_expressions(context, action['condition'])
+            return self.eval(condition, context)
         return True
 
-    def eval(self, context):
+    def eval(self, in_str, context):
         try:
-            return eval(action['condition'], context, {})
+            return eval(in_str, context, {})
         except Exception as e:
             log.info('Error evaluating condition: {}'.format(e))
             self.error('Slave({}) action: {} got error evaluating condition: {}'.format(self.id, action['name'], e))
 
     def test_action(self, context, session, action):
-        run = {
-            'name': action['name']
-        }
-        if 'input' in action:
-            async_request = grequests.post(self.base + action['url'], action['input'],
-                                           session=session)
+        if 'name' in action:
+            run = {'name': action['name']}
         else:
-            async_request = grequests.get(self.base + action['url'],
-                                          session=session)
+            log.warn('Missing name in action')
+            return
+
+        if 'url' in action:
+            url = self.base + self.eval_expressions(context, action['url'])
+        else:
+            log.warn('Missing url in action')
+            return
+
+        if 'input' in action:
+            input = self.eval_expressions(context, action['input'])
+            async_request = grequests.post(url, input, session=session)
+        else:
+            async_request = grequests.get(url, session=session)
         e = gevent.spawn(async_request.send)
 
         start_time = time()

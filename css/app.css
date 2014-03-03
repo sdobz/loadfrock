@@ -138,6 +138,7 @@ body {
     background-color: #fffde1;
     padding-top: 20px;
     margin-top: -10px;
+    margin-bottom: 10px;
 }
 
 textarea {
@@ -146,4 +147,29 @@ textarea {
     -moz-transition: 0.05s;
     -webkit-transition: 0.05s;
     -o-transition: 0.05s;
+}
+
+.results-summary {
+    border-radius: 8px;
+    padding: 15px 10px 5px 15px;
+    background-color: #DBD792
+}
+
+.results-header {
+    margin-bottom: 10px;
+    font-weight: bold;
+}
+
+.action-header-results {
+    padding-bottom: 10px;
+}
+
+.action-body-results {
+    padding: 10px;
+}
+
+.result-plot {
+    display: block;
+    height: 150px;
+    width: 100%;
 }

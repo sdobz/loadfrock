@@ -360,11 +360,11 @@
       return TestRunner.running = false;
     });
     MasterService.register_action('test_result', function(data) {
-      var action, action_result, i, _i, _len, _ref;
-      console.log('Got result ', data);
+      var action, action_result, avg_data, avg_time_data, i, j, runs, _i, _j, _len, _ref, _ref1, _results;
       ResultService.runs += data['total_runs'];
       i = 0;
       _ref = data['actions'];
+      _results = [];
       for (_i = 0, _len = _ref.length; _i < _len; _i++) {
         action = _ref[_i];
         if (!ResultService.actions[i]) {
@@ -380,21 +380,53 @@
         action_result.runs_list.push(action.runs);
         action_result.avg_list.push(action.avg_time);
         if (action_result.runs === 0) {
-          console.log('Setting avg_time to', action.avg_time);
           action_result.avg_time = action.avg_time;
         } else {
           action_result.avg_time = (action_result.runs / (action_result.runs + action.runs)) * action_result.avg_time + (action.runs / (action_result.runs + action.runs)) * action.avg_time;
         }
         action_result.runs += action.runs;
-        i += 1;
+        runs = 0;
+        avg_time_data = [];
+        avg_data = [[action_result.runs_list[0], action_result.avg_time], [action_result.runs, action_result.avg_time]];
+        for (j = _j = 0, _ref1 = action_result.avg_list.length; 0 <= _ref1 ? _j <= _ref1 : _j >= _ref1; j = 0 <= _ref1 ? ++_j : --_j) {
+          runs += action_result.runs_list[j];
+          avg_time_data.push([runs, action_result.avg_list[j]]);
+        }
+        action_result.chart_data = [avg_data, avg_time_data];
+        _results.push(i += 1);
       }
-      return console.log('Compiled into', ResultService);
+      return _results;
     });
     return ResultService;
   });
 
-  app.controller('ResultsCtrl', function($scope, ResultsService) {
+  app.controller('ResultsCtrl', function($scope, ResultsService, Test) {
+    $scope.test = Test;
     return $scope.results = ResultsService;
+  });
+
+  app.directive('chart', function() {
+    return {
+      restrict: 'E',
+      link: function(scope, elem, attrs) {
+        var chart, options;
+        chart = null;
+        if (attrs.ngOptions) {
+          options = JSON.parse(attrs.ngOptions);
+        } else {
+          options = {};
+        }
+        return scope.$watch(attrs.ngModel, function(data) {
+          if (!chart) {
+            return chart = $.plot(elem, data, options);
+          } else {
+            chart.setData(data);
+            chart.setupGrid();
+            return chart.draw();
+          }
+        });
+      }
+    };
   });
 
 }).call(this);

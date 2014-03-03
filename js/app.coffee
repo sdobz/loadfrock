@@ -275,7 +275,6 @@ app.service 'ResultsService', (MasterService, TestRunner) ->
     TestRunner.running = false
 
   MasterService.register_action 'test_result', (data) ->
-    console.log 'Got result ', data
     ResultService.runs += data['total_runs']
     i = 0
     for action in data['actions']
@@ -291,16 +290,40 @@ app.service 'ResultsService', (MasterService, TestRunner) ->
       action_result.avg_list.push action.avg_time
 
       if action_result.runs == 0
-        console.log 'Setting avg_time to', action.avg_time
         action_result.avg_time = action.avg_time
       else
         action_result.avg_time = (action_result.runs/(action_result.runs + action.runs)) * action_result.avg_time + (action.runs/(action_result.runs + action.runs)) * action.avg_time
 
       action_result.runs += action.runs
 
+      runs = 0
+      avg_time_data = []
+      avg_data = [[action_result.runs_list[0], action_result.avg_time], [action_result.runs, action_result.avg_time]]
+      for j in [0..action_result.avg_list.length]
+        runs += action_result.runs_list[j]
+        avg_time_data.push [runs, action_result.avg_list[j]]
+
+      action_result.chart_data = [avg_data, avg_time_data]
+
       i += 1
-    console.log 'Compiled into', ResultService
   return ResultService
 
-app.controller 'ResultsCtrl', ($scope, ResultsService)->
+app.controller 'ResultsCtrl', ($scope, ResultsService, Test)->
+  $scope.test = Test
   $scope.results = ResultsService
+
+app.directive 'chart', ->
+  restrict: 'E',
+  link: (scope, elem, attrs) ->
+    chart = null
+    if attrs.ngOptions
+      options = JSON.parse attrs.ngOptions
+    else
+      options = {}
+    scope.$watch attrs.ngModel, (data) ->
+      if !chart
+        chart = $.plot elem, data, options
+      else
+        chart.setData data
+        chart.setupGrid()
+        chart.draw()
